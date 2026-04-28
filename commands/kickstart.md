@@ -105,9 +105,20 @@ If the task has NO `goal_id`:
 >
 > Two options:
 > 1. Do it anyway as maintenance work (totally valid — not everything needs a goal).
-> 2. Tell me which goal it actually serves and I'll link it before we start.
+> 2. Tell me which goal it actually serves and I'll link it.
 
-Wait for an answer before proceeding. If they pick (2), update the task's `goal_id` and write the note back via `write-daily`.
+Wait for an answer before proceeding. If they pick (2), perform the link mutation:
+
+1. Re-parse today's note: `parse-daily --path "$TODAY_PATH"`.
+2. Walk the parsed `planned` array (and `missed` if the task came from there) to find the entry whose `text` matches the picked task. Set its `goal_id` to the chosen goal id.
+3. Pass the *entire parsed JSON* (including `raw_sections`, `mood`, `energy`, `energy_eod`, `kickstarts`) to `write-daily`:
+   ```bash
+   echo '<full parsed json with mutated goal_id>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py \
+     --config ~/.claude/skills/work-buddy/config.json write-daily --path "$TODAY_PATH"
+   ```
+4. Confirm: "Linked to <goal title>. Now: <starter>"
+
+Do NOT clobber the file by writing only the fields you care about — pass everything through so kickstart count, custom sections, etc. are preserved.
 
 ## Step 7 — Permission and exit
 
@@ -117,14 +128,15 @@ Close with:
 
 ## Step 8 — Optional immediate logging
 
-If the user replies "done" or similar within the same session:
+If the user replies "done", "did it", "ok", or anything similar indicating they completed the starter (be lenient in interpretation):
 
-1. Re-load today's note (or create one via `render-daily` if missing).
-2. Add an entry to `wins`:
+1. Re-parse today's note (it definitely exists — Step 0 created it). Run `parse-daily --path "$TODAY_PATH"`.
+2. Append to the parsed `wins` array:
    ```json
-   {"text": "Kickstart: <starter description>", "checked": true, "goal_id": "<linked goal or null>", "raw": "- [x] ..."}
+   {"text": "Kickstart: <starter description>", "checked": true, "goal_id": "<linked goal or null>", "raw": ""}
    ```
-3. Call `write-daily` to persist.
+   (Leave `raw` empty — `write-daily` regenerates it.)
+3. Pass the *full parsed JSON* (including `raw_sections`, mood, energy, energy_eod, kickstarts) into `write-daily` so nothing else is lost.
 4. Reply: "Logged. That counts. Rest if you need to."
 
 Do NOT push them to do another task. The whole point of this command is that finishing the starter = success.

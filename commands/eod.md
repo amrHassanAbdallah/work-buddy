@@ -69,7 +69,7 @@ For each win text entered, add `{"text": "<text>", "checked": true, "goal_id": n
 
 ## Step 6 — Write the updated note
 
-Build the updated JSON, preserving frontmatter fields:
+Build the updated JSON, preserving frontmatter fields AND any custom sections:
 ```json
 {
   "date": "<date>",
@@ -82,7 +82,8 @@ Build the updated JSON, preserving frontmatter fields:
   "done": [tasks moved to done],
   "missed": [tasks moved to missed],
   "wins": [win items],
-  "reflection": "<reflection text>"
+  "reflection": "<reflection text>",
+  "raw_sections": <pass through from parse-daily — preserves user-added sections like ## Notes>
 }
 ```
 

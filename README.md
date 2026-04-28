@@ -54,5 +54,18 @@ Running `/work-buddy` with no argument auto-selects `morning` (if today has no p
 
 ## Requirements
 
-- Python 3 (stdlib only, no dependencies)
+- Python 3.9+ (stdlib only, no dependencies — uses `date.fromisocalendar`)
 - macOS or Linux
+
+## Codex / non-Claude-Code clients
+
+Run `./build-instructions.sh` to regenerate `INSTRUCTIONS.md`, which bundles the router and every subcommand into one file. Paste it into Codex context and the model has the full skill.
+
+Re-run after editing any `commands/*.md` or `SKILL.md`.
+
+## Notes / known limits
+
+- **Slash-command args**: `/work-buddy morning` should work directly. If your client doesn't pass the trailing token through to the skill cleanly, just say `morning` (or the subcommand name) as the first thing after invoking the skill.
+- **Custom Obsidian sections** (`## Notes`, `## Links`, etc.) you add to a daily note **are preserved** across `eod`/`morning` rewrites — they're parsed into `raw_sections` and re-emitted after `## Reflection`.
+- **Don't rename** the canonical H2 headings (`## Planned`, `## Done`, `## Missed`, `## Wins`, `## Reflection`) — the parser matches on exact name. Adding new H2s is fine; renaming the existing ones breaks parsing.
+- **Indented checkboxes are not parsed** (no nesting). Keep tasks at column 0.

@@ -159,7 +159,7 @@ Build the JSON:
 }
 ```
 
-**Important**: if today's note already existed before this run (e.g. kickstart created it earlier), `parse-daily` it first and preserve `kickstarts`, existing `wins`, `done`, etc. Don't clobber them.
+**Important**: if today's note already existed before this run (e.g. kickstart created it earlier), `parse-daily` it first and preserve **everything**: `kickstarts`, existing `wins`, `done`, `missed`, `mood`, `energy`, `energy_eod`, AND `raw_sections` (custom sections like `## Notes` the user added in Obsidian). Pass `raw_sections` through unchanged in the JSON sent to `write-daily` — `write-daily` re-emits unknown sections after Reflection so user content isn't lost.
 
 Run:
 ```bash

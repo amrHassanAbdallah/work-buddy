@@ -146,18 +146,23 @@ def _split_sections(content: str) -> dict:
     """Split markdown into {section_name: body_text} dict.
     Frontmatter (--- ... ---) is stored as '__frontmatter__'.
     Text before any heading is '__preamble__'.
+    The H1 page title is stored as '__title__' (not a section).
+    Only H2/H3 headings become sections.
     """
     lines = content.splitlines()
     sections: dict = {}
     current = "__preamble__"
+    current_level = 0
     buffer: list = []
     in_frontmatter = False
-    frontmatter_done = False
     i = 0
+
+    def flush():
+        if current.startswith("__") or current_level >= 2:
+            sections[current] = "\n".join(buffer).strip()
 
     while i < len(lines):
         line = lines[i]
-        # Handle frontmatter
         if i == 0 and FRONTMATTER_RE.match(line):
             in_frontmatter = True
             buffer = []
@@ -166,25 +171,32 @@ def _split_sections(content: str) -> dict:
         if in_frontmatter:
             if FRONTMATTER_RE.match(line):
                 in_frontmatter = False
-                frontmatter_done = True
                 sections["__frontmatter__"] = "\n".join(buffer)
                 buffer = []
                 current = "__preamble__"
+                current_level = 0
             else:
                 buffer.append(line)
             i += 1
             continue
-        # Heading detection
         heading_m = re.match(r"^(#{1,3})\s+(.+)$", line)
         if heading_m:
-            sections[current] = "\n".join(buffer).strip()
+            flush()
             buffer = []
-            current = heading_m.group(2).strip()
+            level = len(heading_m.group(1))
+            name = heading_m.group(2).strip()
+            if level == 1:
+                sections["__title__"] = name
+                current = "__title_body__"
+                current_level = 1
+            else:
+                current = name
+                current_level = level
         else:
             buffer.append(line)
         i += 1
 
-    sections[current] = "\n".join(buffer).strip()
+    flush()
     return sections
 
 
@@ -285,7 +297,22 @@ def parse_goals(path: Path) -> list:
     if current is not None:
         goals.append(current)
 
-    return goals
+    # Filter out placeholder/invalid goals so morning, weekly, kickstart never
+    # treat the unfilled template as real data. Valid goal must have:
+    # - id matching ^[a-z0-9-]+$
+    # - non-placeholder title (anything not literally containing angle brackets)
+    valid_id = re.compile(r"^[a-z0-9-]+$")
+    cleaned = []
+    for g in goals:
+        if not valid_id.match(g.get("id", "") or ""):
+            continue
+        title = g.get("title", "") or ""
+        if title.startswith("<") and title.endswith(">"):
+            continue
+        if title in ("...",):
+            continue
+        cleaned.append(g)
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +428,19 @@ def write_daily(data: dict, path: Path) -> None:
         lines.append(reflection)
     else:
         lines.append("<!-- one line: what I learned today -->")
+
+    # Preserve any user-added sections that aren't part of the canonical set.
+    # Caller passes raw_sections from parse_daily through unchanged.
+    known = {"Planned", "Done", "Missed", "Wins", "Reflection"}
+    extras = data.get("raw_sections") or {}
+    for name, body in extras.items():
+        if name in known or name.startswith("__"):
+            continue
+        if not body and not name:
+            continue
+        lines += ["", f"## {name}"]
+        if body:
+            lines.append(body)
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -688,7 +728,15 @@ def kickstart_signals(cfg: dict) -> dict:
             reasons.append(f"Yesterday's morning energy was {e}/5.")
         if e_eod is not None and e_eod <= 2:
             reasons.append(f"Yesterday ended at energy {e_eod}/5.")
-        if len(pd["planned"]) + len(pd["missed"]) >= 3 and len(pd["done"]) == 0:
+        # Only treat "0 done" as a signal if we have evidence eod actually ran.
+        # Otherwise a user who runs morning but skips eod gets this flag every day.
+        eod_ran = (
+            e_eod is not None
+            or bool((pd.get("reflection") or "").strip())
+            or len(pd["missed"]) > 0
+            or len(pd["done"]) > 0
+        )
+        if eod_ran and len(pd["planned"]) + len(pd["missed"]) >= 3 and len(pd["done"]) == 0:
             reasons.append("Yesterday: 0 tasks completed.")
 
     # Carry-over chain detection — look back up to 5 days
