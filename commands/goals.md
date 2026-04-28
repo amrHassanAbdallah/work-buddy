@@ -65,12 +65,18 @@ Build the JSON structure:
 }
 ```
 
-Pipe it to `write-goals`:
+Write the JSON to a temp file via single-quoted heredoc (avoids shell-escape problems if any goal title contains apostrophes/quotes), then call `write-goals --from-file`:
+
 ```bash
-echo '<json>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
-  write-goals \
-  --path "<quarterly_md_path>"
+cat > /tmp/wb-goals-payload.json <<'PAYLOAD'
+<json here>
+PAYLOAD
+
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  write-goals --path "<quarterly_md_path>" --from-file /tmp/wb-goals-payload.json
 ```
+
+**Never use `echo '<json>' | ...`** — quotes inside titles or notes will break the pipe.
 
 Output is `{"status": "ok", "path": "..."}`.
 

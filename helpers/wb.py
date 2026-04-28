@@ -829,9 +829,11 @@ def get_parser() -> argparse.ArgumentParser:
 
     wd = sub.add_parser("write-daily")
     wd.add_argument("--path", required=True)
+    wd.add_argument("--from-file", help="Read JSON payload from file instead of stdin")
 
     wg = sub.add_parser("write-goals")
     wg.add_argument("--path", required=True)
+    wg.add_argument("--from-file", help="Read JSON payload from file instead of stdin")
 
     iv = sub.add_parser("init-vault")
     iv.add_argument("--vault-path", required=True)
@@ -847,6 +849,17 @@ def get_parser() -> argparse.ArgumentParser:
     sub.add_parser("kickstart-signals")
 
     return p
+
+
+def _load_json_input(args) -> dict:
+    """Load JSON payload either from --from-file or from stdin.
+    Prefer --from-file from prompts to avoid shell-escape footguns when
+    payloads contain quotes/apostrophes/special chars."""
+    src = getattr(args, "from_file", None)
+    if src:
+        with open(src, encoding="utf-8") as f:
+            return json.load(f)
+    return json.load(sys.stdin)
 
 
 def main() -> None:
@@ -914,12 +927,12 @@ def main() -> None:
         print(render_daily(d))
 
     elif args.cmd == "write-daily":
-        data = json.load(sys.stdin)
+        data = _load_json_input(args)
         write_daily(data, Path(args.path))
         print(json.dumps({"status": "ok", "path": args.path}))
 
     elif args.cmd == "write-goals":
-        data = json.load(sys.stdin)
+        data = _load_json_input(args)
         write_goals(data, Path(args.path))
         print(json.dumps({"status": "ok", "path": args.path}))
 

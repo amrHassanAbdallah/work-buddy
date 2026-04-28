@@ -89,11 +89,18 @@ Build the updated JSON, preserving frontmatter fields AND any custom sections:
 
 Note: `planned` should contain only unchecked (unresolved) tasks after processing. Completed tasks move out of `planned` into `done`/`missed`.
 
-Run:
+Write the JSON to a temp file with a single-quoted heredoc, then call `write-daily --from-file` (avoids any shell-escape issues with apostrophes / quotes in task text):
+
 ```bash
-echo '<json>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
-  write-daily --path "<TODAY_PATH>"
+cat > /tmp/wb-eod-payload.json <<'PAYLOAD'
+<json here>
+PAYLOAD
+
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  write-daily --path "<TODAY_PATH>" --from-file /tmp/wb-eod-payload.json
 ```
+
+**Never use `echo '<json>' | ...`** — apostrophes/quotes inside task text break the pipe.
 
 ## Step 7 — Print summary
 

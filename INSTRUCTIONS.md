@@ -228,12 +228,18 @@ Build the JSON structure:
 }
 ```
 
-Pipe it to `write-goals`:
+Write the JSON to a temp file via single-quoted heredoc (avoids shell-escape problems if any goal title contains apostrophes/quotes), then call `write-goals --from-file`:
+
 ```bash
-echo '<json>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
-  write-goals \
-  --path "<quarterly_md_path>"
+cat > /tmp/wb-goals-payload.json <<'PAYLOAD'
+<json here>
+PAYLOAD
+
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  write-goals --path "<quarterly_md_path>" --from-file /tmp/wb-goals-payload.json
 ```
+
+**Never use `echo '<json>' | ...`** — quotes inside titles or notes will break the pipe.
 
 Output is `{"status": "ok", "path": "..."}`.
 
@@ -410,11 +416,18 @@ Build the JSON:
 
 **Important**: if today's note already existed before this run (e.g. kickstart created it earlier), `parse-daily` it first and preserve **everything**: `kickstarts`, existing `wins`, `done`, `missed`, `mood`, `energy`, `energy_eod`, AND `raw_sections` (custom sections like `## Notes` the user added in Obsidian). Pass `raw_sections` through unchanged in the JSON sent to `write-daily` — `write-daily` re-emits unknown sections after Reflection so user content isn't lost.
 
-Run:
+Write the JSON to a temp file with a single-quoted heredoc (this prevents any shell-escape problems with apostrophes / quotes inside task text), then call `write-daily --from-file`:
+
 ```bash
-echo '<json>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
-  write-daily --path "<TODAY_PATH>"
+cat > /tmp/wb-morning-payload.json <<'PAYLOAD'
+<json here>
+PAYLOAD
+
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  write-daily --path "<TODAY_PATH>" --from-file /tmp/wb-morning-payload.json
 ```
+
+**Never use `echo '<json>' | ...`** — task text containing `'` or `"` will break the pipe and either fail or corrupt the file.
 
 ## Step 8 — Output summary
 
@@ -616,11 +629,18 @@ Build the updated JSON, preserving frontmatter fields AND any custom sections:
 
 Note: `planned` should contain only unchecked (unresolved) tasks after processing. Completed tasks move out of `planned` into `done`/`missed`.
 
-Run:
+Write the JSON to a temp file with a single-quoted heredoc, then call `write-daily --from-file` (avoids any shell-escape issues with apostrophes / quotes in task text):
+
 ```bash
-echo '<json>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
-  write-daily --path "<TODAY_PATH>"
+cat > /tmp/wb-eod-payload.json <<'PAYLOAD'
+<json here>
+PAYLOAD
+
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  write-daily --path "<TODAY_PATH>" --from-file /tmp/wb-eod-payload.json
 ```
+
+**Never use `echo '<json>' | ...`** — apostrophes/quotes inside task text break the pipe.
 
 ## Step 7 — Print summary
 
@@ -750,10 +770,15 @@ Wait for an answer before proceeding. If they pick (2), perform the link mutatio
 
 1. Re-parse today's note: `parse-daily --path "$TODAY_PATH"`.
 2. Walk the parsed `planned` array (and `missed` if the task came from there) to find the entry whose `text` matches the picked task. Set its `goal_id` to the chosen goal id.
-3. Pass the *entire parsed JSON* (including `raw_sections`, `mood`, `energy`, `energy_eod`, `kickstarts`) to `write-daily`:
+3. Pass the *entire parsed JSON* (including `raw_sections`, `mood`, `energy`, `energy_eod`, `kickstarts`) to `write-daily` via heredoc + `--from-file` (never `echo`, to avoid shell-escape issues with quotes/apostrophes):
    ```bash
-   echo '<full parsed json with mutated goal_id>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py \
-     --config ~/.claude/skills/work-buddy/config.json write-daily --path "$TODAY_PATH"
+   cat > /tmp/wb-kickstart-payload.json <<'PAYLOAD'
+   <full parsed json with mutated goal_id>
+   PAYLOAD
+
+   python3 ~/.claude/skills/work-buddy/helpers/wb.py \
+     --config ~/.claude/skills/work-buddy/config.json \
+     write-daily --path "$TODAY_PATH" --from-file /tmp/wb-kickstart-payload.json
    ```
 4. Confirm: "Linked to <goal title>. Now: <starter>"
 
@@ -775,7 +800,7 @@ If the user replies "done", "did it", "ok", or anything similar indicating they 
    {"text": "Kickstart: <starter description>", "checked": true, "goal_id": "<linked goal or null>", "raw": ""}
    ```
    (Leave `raw` empty — `write-daily` regenerates it.)
-3. Pass the *full parsed JSON* (including `raw_sections`, mood, energy, energy_eod, kickstarts) into `write-daily` so nothing else is lost.
+3. Pass the *full parsed JSON* (including `raw_sections`, mood, energy, energy_eod, kickstarts) into `write-daily` via the same heredoc + `--from-file` pattern shown above.
 4. Reply: "Logged. That counts. Rest if you need to."
 
 Do NOT push them to do another task. The whole point of this command is that finishing the starter = success.

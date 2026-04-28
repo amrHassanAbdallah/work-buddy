@@ -57,6 +57,14 @@ Running `/work-buddy` with no argument auto-selects `morning` (if today has no p
 - Python 3.9+ (stdlib only, no dependencies — uses `date.fromisocalendar`)
 - macOS or Linux
 
+## Tests
+
+```bash
+python3 -m unittest tests.test_wb -v
+```
+
+23 tests covering parse/write round-trip, custom-section preservation, goal filtering, kickstart-signal gating, weekly aggregator thresholds, and CLI `--from-file` integration. No external deps — stdlib `unittest`.
+
 ## Codex / non-Claude-Code clients
 
 Run `./build-instructions.sh` to regenerate `INSTRUCTIONS.md`, which bundles the router and every subcommand into one file. Paste it into Codex context and the model has the full skill.

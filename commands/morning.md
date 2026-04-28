@@ -161,11 +161,18 @@ Build the JSON:
 
 **Important**: if today's note already existed before this run (e.g. kickstart created it earlier), `parse-daily` it first and preserve **everything**: `kickstarts`, existing `wins`, `done`, `missed`, `mood`, `energy`, `energy_eod`, AND `raw_sections` (custom sections like `## Notes` the user added in Obsidian). Pass `raw_sections` through unchanged in the JSON sent to `write-daily` — `write-daily` re-emits unknown sections after Reflection so user content isn't lost.
 
-Run:
+Write the JSON to a temp file with a single-quoted heredoc (this prevents any shell-escape problems with apostrophes / quotes inside task text), then call `write-daily --from-file`:
+
 ```bash
-echo '<json>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
-  write-daily --path "<TODAY_PATH>"
+cat > /tmp/wb-morning-payload.json <<'PAYLOAD'
+<json here>
+PAYLOAD
+
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  write-daily --path "<TODAY_PATH>" --from-file /tmp/wb-morning-payload.json
 ```
+
+**Never use `echo '<json>' | ...`** — task text containing `'` or `"` will break the pipe and either fail or corrupt the file.
 
 ## Step 8 — Output summary
 

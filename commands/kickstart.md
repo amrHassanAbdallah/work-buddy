@@ -111,10 +111,15 @@ Wait for an answer before proceeding. If they pick (2), perform the link mutatio
 
 1. Re-parse today's note: `parse-daily --path "$TODAY_PATH"`.
 2. Walk the parsed `planned` array (and `missed` if the task came from there) to find the entry whose `text` matches the picked task. Set its `goal_id` to the chosen goal id.
-3. Pass the *entire parsed JSON* (including `raw_sections`, `mood`, `energy`, `energy_eod`, `kickstarts`) to `write-daily`:
+3. Pass the *entire parsed JSON* (including `raw_sections`, `mood`, `energy`, `energy_eod`, `kickstarts`) to `write-daily` via heredoc + `--from-file` (never `echo`, to avoid shell-escape issues with quotes/apostrophes):
    ```bash
-   echo '<full parsed json with mutated goal_id>' | python3 ~/.claude/skills/work-buddy/helpers/wb.py \
-     --config ~/.claude/skills/work-buddy/config.json write-daily --path "$TODAY_PATH"
+   cat > /tmp/wb-kickstart-payload.json <<'PAYLOAD'
+   <full parsed json with mutated goal_id>
+   PAYLOAD
+
+   python3 ~/.claude/skills/work-buddy/helpers/wb.py \
+     --config ~/.claude/skills/work-buddy/config.json \
+     write-daily --path "$TODAY_PATH" --from-file /tmp/wb-kickstart-payload.json
    ```
 4. Confirm: "Linked to <goal title>. Now: <starter>"
 
@@ -136,7 +141,7 @@ If the user replies "done", "did it", "ok", or anything similar indicating they 
    {"text": "Kickstart: <starter description>", "checked": true, "goal_id": "<linked goal or null>", "raw": ""}
    ```
    (Leave `raw` empty — `write-daily` regenerates it.)
-3. Pass the *full parsed JSON* (including `raw_sections`, mood, energy, energy_eod, kickstarts) into `write-daily` so nothing else is lost.
+3. Pass the *full parsed JSON* (including `raw_sections`, mood, energy, energy_eod, kickstarts) into `write-daily` via the same heredoc + `--from-file` pattern shown above.
 4. Reply: "Logged. That counts. Rest if you need to."
 
 Do NOT push them to do another task. The whole point of this command is that finishing the starter = success.
