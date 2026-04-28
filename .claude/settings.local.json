@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x *)",
+      "Bash(python3 *)",
+      "Read(//private/tmp/**)",
+      "Bash(cat)"
+    ]
+  }
+}

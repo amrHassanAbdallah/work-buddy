@@ -1,0 +1,5 @@
+# Weekday 09:00 — open today's plan in your editor (one example, user adapts)
+0 9 * * 1-5 osascript -e 'display notification "Time to plan today" with title "work-buddy"'
+
+# Friday 17:00 — nudge for weekly review
+0 17 * * 5 osascript -e 'display notification "Run /work-buddy weekly" with title "work-buddy"'
