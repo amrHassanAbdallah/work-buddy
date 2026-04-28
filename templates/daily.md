@@ -1,6 +1,10 @@
 ---
 date: {{date}}
 week: {{iso_week}}
+mood:
+energy:
+energy_eod:
+kickstarts: 0
 ---
 
 # {{date_human}}

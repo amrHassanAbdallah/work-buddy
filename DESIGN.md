@@ -81,6 +81,54 @@ If the file is missing or `vault_path` doesn't exist, every subcommand short-cir
 
 ---
 
+## Mood, energy, and kickstart tracking
+
+Stored as YAML frontmatter on each daily note:
+
+```yaml
+---
+date: 2026-04-28
+week: 2026-W18
+mood: tired           # one word, free-form, set at morning
+energy: 2             # 1–5 integer, set at morning
+energy_eod: 3         # 1–5 integer, set at end-of-day
+kickstarts: 2         # incremented every time /work-buddy kickstart fires
+---
+```
+
+All four fields are optional — empty values are valid and skipped. Friction is kept dirt-cheap on purpose: one-word mood + one-digit energy, asked once at morning and once at eod.
+
+The weekly aggregator surfaces:
+- Avg energy across the week (treats AM and PM samples equally)
+- Mood word frequency
+- Total kickstart count
+
+## Proactive kickstart suggestion
+
+`/work-buddy morning` and `/work-buddy now` both call `wb.py kickstart-signals` before doing anything. If signals trip, they suggest `/work-buddy kickstart` once, without forcing it.
+
+Signals (any one trips):
+- Yesterday's `energy` or `energy_eod` was ≤ 2.
+- Yesterday had ≥ 3 planned/missed and 0 done.
+- Same task text has been carried over (unchecked or missed) for ≥ 3 distinct days in the last 5.
+- Today's `kickstarts` ≥ 3 (suggests rest, not another sprint).
+
+The user can always decline. The skill never auto-runs kickstart.
+
+## "To discuss with manager" — weekly synthesis
+
+The weekly review surfaces a dedicated **To discuss with manager** section, generated deterministically from data thresholds:
+
+| Generator | Threshold | Output |
+|---|---|---|
+| `blocker` | task carried 3+ days | "Stuck on X for N days, could use unblock" |
+| `stalled_goal` | impact ≥ 4, 0 dones, ≥ 2 attempts | "Goal Y had 0 progress despite N attempts — pressure-test priority" |
+| `growth_visibility` | win linked to a `type: growth` goal | "Growth signal: <win> — worth flagging" |
+| `workload_signal` | kickstarts ≥ 4 OR avg energy ≤ 2.5 | "Workload/load check-in suggested" |
+| `alignment_drift` | ≥ 30% of week's tasks unlinked to goals | "Lots of work wasn't tied to goals — revisit priorities" |
+
+If nothing trips, the section reads "_nothing flagged this week — quiet good week or quiet bad week, you decide_".
+
 ## Subcommands
 
 The skill is invoked as `/work-buddy <subcommand>`. The router is `SKILL.md`; each subcommand has its own prompt file under `commands/`.

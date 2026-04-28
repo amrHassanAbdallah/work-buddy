@@ -53,6 +53,13 @@ Ask:
 
 Store the response in `reflection`.
 
+## Step 4.5 — End-of-day energy
+
+Ask:
+> "Energy at end of day, 1–5? (or skip)"
+
+Capture as integer 1–5 or null. Store as `energy_eod` in the JSON. Preserve the existing `mood`, `energy`, and `kickstarts` from the parsed note — do not overwrite them.
+
 ## Step 5 — Additional wins
 
 Ask:
@@ -62,12 +69,16 @@ For each win text entered, add `{"text": "<text>", "checked": true, "goal_id": n
 
 ## Step 6 — Write the updated note
 
-Build the updated JSON:
+Build the updated JSON, preserving frontmatter fields:
 ```json
 {
   "date": "<date>",
   "iso_week": "<iso_week>",
-  "planned": [all tasks that are done or in other sections keep their original raw for round-trip; update checked flag],
+  "mood": "<preserve existing>",
+  "energy": <preserve existing>,
+  "energy_eod": <from step 4.5 or null>,
+  "kickstarts": <preserve existing count>,
+  "planned": [tasks still unresolved],
   "done": [tasks moved to done],
   "missed": [tasks moved to missed],
   "wins": [win items],

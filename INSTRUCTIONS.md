@@ -71,6 +71,9 @@ render-daily [--date YYYY-MM-DD] → markdown string (stdout)
 write-daily --path PATH          → reads JSON from stdin, writes file, returns {"status":"ok","path":"..."}
 write-goals --path PATH          → reads JSON from stdin, writes file, returns {"status":"ok","path":"..."}
 init-vault --vault-path P [--subdir S] → creates dirs + config, returns {"status":"ok",...}
+bump-kickstart [--path PATH]     → increments today's kickstarts, creates note if missing
+weekly-aggregate [--year Y --week W] → full week stats incl. manager_items
+kickstart-signals                → {"suggest": bool, "reasons": [str]}
 ```
 
 ## Task format

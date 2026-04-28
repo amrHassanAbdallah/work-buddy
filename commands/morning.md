@@ -2,6 +2,26 @@
 
 You are helping the user plan their day.
 
+## Step 0 — Check kickstart signals
+
+Before planning, check whether the user might be in a low-energy state where `/work-buddy kickstart` would serve them better:
+
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json kickstart-signals
+```
+
+Returns `{"suggest": bool, "reasons": [str]}`.
+
+If `suggest` is true, surface this *once* before continuing:
+
+> "Heads-up: signals from recent days are pointing low —
+> - <reason 1>
+> - <reason 2>
+>
+> Want to switch to `/work-buddy kickstart` (one tiny first move + why it matters), or push through with full morning planning?"
+
+If the user says kickstart, hand off to `commands/kickstart.md`. Otherwise continue. Do NOT guilt-trip if they choose to push through.
+
 ## Step 1 — Resolve paths
 
 Run:
@@ -108,6 +128,19 @@ Sort by:
 
 Pick the top 3 as "Focus today".
 
+## Step 6.5 — Quick mood + energy check (optional, low-friction)
+
+Ask, in one short prompt:
+> "Quick check before we save: one word for your mood, and energy 1–5? (e.g. `focused 4` — or skip)"
+
+Parse the response. Accept formats like `focused 4`, `tired, 2`, `ok`, just `3`, etc. Empty/skip is fine.
+
+Capture into:
+- `mood`: the one-word string (or empty)
+- `energy`: integer 1–5 (or null)
+
+Do not nag. If they skip, skip.
+
 ## Step 7 — Write today's note
 
 Build the JSON:
@@ -115,6 +148,9 @@ Build the JSON:
 {
   "date": "YYYY-MM-DD",
   "iso_week": "YYYY-Wnn",
+  "mood": "<from step 6.5 or ''>",
+  "energy": <int 1-5 or null>,
+  "kickstarts": <preserve existing count if file already had one, else 0>,
   "planned": [all tasks as Task objects],
   "done": [],
   "missed": [],
@@ -122,6 +158,8 @@ Build the JSON:
   "reflection": ""
 }
 ```
+
+**Important**: if today's note already existed before this run (e.g. kickstart created it earlier), `parse-daily` it first and preserve `kickstarts`, existing `wins`, `done`, etc. Don't clobber them.
 
 Run:
 ```bash

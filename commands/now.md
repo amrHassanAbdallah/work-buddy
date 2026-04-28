@@ -2,6 +2,19 @@
 
 You are helping the user decide what to work on right now.
 
+## Step 0 — Kickstart signal check
+
+Run:
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json kickstart-signals
+```
+
+Returns `{"suggest": bool, "reasons": [str]}`. If `suggest` is true, surface gently *once* before picking:
+
+> "(Quick note: <reason 1>. If you'd rather start tiny instead of just-the-next-thing, try `/work-buddy kickstart`. Otherwise:)"
+
+Then continue. Do NOT block waiting for a response — proceed to pick the task; the user can interrupt if they want kickstart.
+
 ## Step 1 — Load today's note
 
 Run:

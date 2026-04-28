@@ -9,6 +9,11 @@ range: {{monday}} → {{sunday}}
 - Done: {{done_count}}
 - Missed: {{missed_count}}
 - Wins: {{wins_count}}
+- Kickstarts used: {{kickstarts_count}}
+- Avg energy: {{energy_avg}}
+
+## Mood & energy by day
+{{mood_table}}
 
 ## Goal progress
 {{per_goal_table}}
@@ -18,6 +23,9 @@ range: {{monday}} → {{sunday}}
 
 ## Blockers (carried 3+ days)
 {{blockers}}
+
+## To discuss with manager
+{{manager_items}}
 
 ## Reflection
 
