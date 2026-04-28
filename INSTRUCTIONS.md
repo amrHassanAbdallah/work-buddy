@@ -71,6 +71,8 @@ Then: `test -f "<path>" && echo "exists" || echo "missing"`
 | `eod`    | `commands/eod.md`               |
 | `weekly` | `commands/weekly.md`            |
 | `kickstart` | `commands/kickstart.md`      |
+| `add`    | `commands/add.md`               |
+| `catchup`| `commands/catchup.md`           |
 
 Read the corresponding `commands/<sub>.md` file and follow its instructions exactly.
 
@@ -87,6 +89,8 @@ Print:
 > - `/work-buddy eod`     — End-of-day review: mark done/missed, log wins
 > - `/work-buddy weekly`  — Weekly review and reflection
 > - `/work-buddy kickstart` — Tired/stuck? Picks a tiny, valuable first move and explains why it matters
+> - `/work-buddy add`      — Quick mid-day task append with goal-link prompt
+> - `/work-buddy catchup`  — Backfill missed eod days (incl. off-plan work you did)
 > 
 > Run with no argument to auto-detect: morning if today has no plan, now if it does."
 
@@ -257,7 +261,27 @@ Show the final goal list and say:
 
 You are helping the user plan their day.
 
-## Step 0 — Check kickstart signals
+## Step 0 — Check for unresolved past workdays
+
+Before kickstart-signal check or anything else, see if the user skipped eod on any recent workdays:
+
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  unresolved-workdays --max-days 7
+```
+
+Returns a list (empty if all caught up). If non-empty, surface once:
+
+> "Heads-up — N workday(s) since you last closed out:
+> - <weekday> (<date>): <N items still planned> / <no note>
+>
+> Want to (a) catch me up via `/work-buddy catchup` (covers what you did, including off-plan stuff), (b) skip and just plan today, (c) one-day quick catchup on the most recent only?"
+
+If (a): hand off to `commands/catchup.md`.
+If (c): inline mini-catchup — walk only the most recent unresolved day using the prompts from `catchup.md` Step 3, then continue with morning.
+If (b): proceed without backfill. Note that `kickstart-signals` may still flag low energy from the prior day, which is fine.
+
+## Step 0.5 — Check kickstart signals
 
 Before planning, check whether the user might be in a low-energy state where `/work-buddy kickstart` would serve them better:
 
@@ -804,6 +828,171 @@ If the user replies "done", "did it", "ok", or anything similar indicating they 
 4. Reply: "Logged. That counts. Rest if you need to."
 
 Do NOT push them to do another task. The whole point of this command is that finishing the starter = success.
+
+
+---
+
+## Subcommand: add (from commands/add.md)
+
+# work-buddy add
+
+Quick mid-day task append. Use this when the user wants to add an item without going through the full `morning` flow.
+
+## Step 1 — Capture the task text
+
+If the user invoked with arguments after `add` (e.g. `/work-buddy add Investigate flaky test`), use that text. Otherwise ask:
+
+> "What's the task? (one line)"
+
+## Step 2 — Auto-prompt for a goal link
+
+Always ask, even if the user already typed `→ <id>` inline (then confirm or override):
+
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  parse-goals --path "$HOME/$(python3 -c 'import json,pathlib;c=json.loads(pathlib.Path.home().joinpath(".claude/skills/work-buddy/config.json").read_text());print(pathlib.Path(c["vault_path"]).joinpath(c.get("subdir","work-buddy"),"Goals/Quarterly.md").relative_to(pathlib.Path.home()))')"
+```
+
+(Or simpler: derive the path the same way every other command does.)
+
+Show the available goal ids as a hint:
+> "Which goal does this support? (perf-q2 · growth-distsys · team-hiring) — type the id, or press Enter to skip."
+
+If the user skips, `goal_id` is null.
+
+## Step 3 — Off-plan?
+
+Ask only if relevant (the user said something like "I just did this" rather than "I'm going to do this"). Otherwise default to off-plan=false.
+
+> "Was this work already done off-plan, or is it on the to-do list?"
+
+If "already done off-plan": pass `--off-plan` and the helper will mark it. (Note: in v1, `append-task` only adds to `planned`. For "already done off-plan" items, prefer logging via `eod` or `catchup`, where they go directly into `done`.)
+
+## Step 4 — Append
+
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  append-task --text "<task text>" --goal "<goal_id or omit>"
+```
+
+Returns `{"status": "ok", "path": "...", "created": bool, "planned_count": N}`.
+
+## Step 5 — Confirm
+
+> "Added. Today now has <planned_count> planned items. Run `/work-buddy now` for the next move."
+
+
+---
+
+## Subcommand: catchup (from commands/catchup.md)
+
+# work-buddy catchup
+
+Backfill unresolved past workdays. Use when the user skipped `eod` for one or more workdays and wants to retroactively close them out, including off-plan work.
+
+**Tone**: low-pressure, memory-friendly. The user is reconstructing from memory days later. "From memory, no pressure — skip if you don't remember" should appear in every retrospective prompt.
+
+## Step 1 — Detect unresolved workdays
+
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  unresolved-workdays --max-days 7
+```
+
+Returns a list of `{date, weekday, has_note, planned_unresolved, eod_done}` for workdays in the last 7 days that need attention. Already-closed days are skipped. Non-workdays (per `cfg.workdays`, default Mon–Fri) are skipped.
+
+If the list is empty:
+> "All caught up — no unresolved workdays in the last 7 days. Run `/work-buddy morning` for today."
+
+Stop here.
+
+## Step 2 — Summarize and confirm scope
+
+If 1 day: just walk it.
+If multiple: tell the user what's outstanding and ask scope.
+
+> "I see N unresolved workday(s):
+> - <Day1> — N items still planned, no eod
+> - <Day2> — no note (might've worked off-record)
+> ...
+>
+> Want to (a) walk through all of them, (b) just the most recent, or (c) skip and plan today?"
+
+If (c): exit and recommend `/work-buddy morning`.
+If (b): keep only the first entry.
+If (a): proceed with all.
+
+## Step 3 — For each day in scope, walk through it
+
+For each day, ask in order:
+
+### 3a — Did you work?
+
+> "<Weekday> (<date>): did you work that day? (yes / off / lightly)"
+
+If "off": skip — don't write a note (don't fabricate planned items). Move on.
+If "lightly" or "yes": continue.
+
+### 3b — If `has_note` is true: walk planned items
+
+For each unchecked planned task (from parse-daily on the date):
+
+> "Task: <text> [goal: <id or none>] — done / missed / cancelled? (from memory, no pressure — skip if unsure)"
+
+Same semantics as `eod`:
+- done → move to `done` with `checked: true`
+- missed → move to `missed`
+- cancelled → drop
+- skip → leave in `planned` for now
+
+### 3c — Off-plan work (the "what else did you do?" prompt)
+
+This is the unique value of catchup. Always ask:
+
+> "Anything else you actually worked on that <Weekday> that wasn't on the plan? List one per line — I'll mark them as off-plan completed work. (Skip with Enter if nothing comes to mind.)"
+
+For each line entered, ask:
+> "'<text>' — does this connect to a goal? (perf-q2 · growth-distsys · ... or skip)"
+
+Build each as a `done` task with `off_plan: true`:
+```json
+{"text": "<text>", "checked": true, "goal_id": "<id or null>", "off_plan": true, "raw": ""}
+```
+
+### 3d — Mood / energy / reflection (retrospective)
+
+Single low-friction prompt:
+> "Roughly how did <Weekday> feel? One word + energy 1–5 if you remember (e.g. `productive 4`), or skip."
+
+Plus:
+> "One-line takeaway from <Weekday>? (skip if blank)"
+
+Set `energy_eod` from the energy number (treat as eod since this is retrospective). Leave `energy` (morning energy) untouched.
+
+## Step 4 — Write each day's note
+
+For each day, build the full JSON (preserving existing `mood`, `energy`, `kickstarts`, `raw_sections`, etc. from the parse) with the catchup updates merged in. Use the heredoc + `--from-file` pattern:
+
+```bash
+cat > /tmp/wb-catchup-payload.json <<'PAYLOAD'
+<full json>
+PAYLOAD
+
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  write-daily --path "<that-day-path>" --from-file /tmp/wb-catchup-payload.json
+```
+
+If the day didn't have a note (`has_note: false`) but the user said they worked, render today's-template-style content for that date first. The simplest path: build the JSON directly with the date set and pass to `write-daily` (it creates the file if missing).
+
+## Step 5 — Summary
+
+Print:
+
+> "Caught up on N day(s):
+> - <Day1>: <done_count> done (<off_plan_count> off-plan), <missed_count> missed
+> - <Day2>: ...
+>
+> Now: `/work-buddy morning` to plan today."
 
 
 ---

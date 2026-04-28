@@ -2,7 +2,27 @@
 
 You are helping the user plan their day.
 
-## Step 0 — Check kickstart signals
+## Step 0 — Check for unresolved past workdays
+
+Before kickstart-signal check or anything else, see if the user skipped eod on any recent workdays:
+
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
+  unresolved-workdays --max-days 7
+```
+
+Returns a list (empty if all caught up). If non-empty, surface once:
+
+> "Heads-up — N workday(s) since you last closed out:
+> - <weekday> (<date>): <N items still planned> / <no note>
+>
+> Want to (a) catch me up via `/work-buddy catchup` (covers what you did, including off-plan stuff), (b) skip and just plan today, (c) one-day quick catchup on the most recent only?"
+
+If (a): hand off to `commands/catchup.md`.
+If (c): inline mini-catchup — walk only the most recent unresolved day using the prompts from `catchup.md` Step 3, then continue with morning.
+If (b): proceed without backfill. Note that `kickstart-signals` may still flag low energy from the prior day, which is fine.
+
+## Step 0.5 — Check kickstart signals
 
 Before planning, check whether the user might be in a low-energy state where `/work-buddy kickstart` would serve them better:
 

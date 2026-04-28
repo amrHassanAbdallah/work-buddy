@@ -63,6 +63,8 @@ Then: `test -f "<path>" && echo "exists" || echo "missing"`
 | `eod`    | `commands/eod.md`               |
 | `weekly` | `commands/weekly.md`            |
 | `kickstart` | `commands/kickstart.md`      |
+| `add`    | `commands/add.md`               |
+| `catchup`| `commands/catchup.md`           |
 
 Read the corresponding `commands/<sub>.md` file and follow its instructions exactly.
 
@@ -79,6 +81,8 @@ Print:
 > - `/work-buddy eod`     — End-of-day review: mark done/missed, log wins
 > - `/work-buddy weekly`  — Weekly review and reflection
 > - `/work-buddy kickstart` — Tired/stuck? Picks a tiny, valuable first move and explains why it matters
+> - `/work-buddy add`      — Quick mid-day task append with goal-link prompt
+> - `/work-buddy catchup`  — Backfill missed eod days (incl. off-plan work you did)
 > 
 > Run with no argument to auto-detect: morning if today has no plan, now if it does."
 

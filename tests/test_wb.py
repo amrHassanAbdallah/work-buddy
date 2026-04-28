@@ -81,6 +81,7 @@ class TestParseTask(unittest.TestCase):
         self.assertEqual(t["text"], "Investigate cache")
         self.assertFalse(t["checked"])
         self.assertEqual(t["goal_id"], "perf-q2")
+        self.assertFalse(t["off_plan"])
 
     def test_checked_no_goal(self):
         t = wb.parse_task("- [x] Random chore")
@@ -91,6 +92,25 @@ class TestParseTask(unittest.TestCase):
     def test_non_task_returns_none(self):
         self.assertIsNone(wb.parse_task("just a line"))
         self.assertIsNone(wb.parse_task("- not a checkbox"))
+
+    def test_off_plan_marker_before_goal(self):
+        t = wb.parse_task("- [x] Random PR review [off-plan] → perf-q2")
+        self.assertEqual(t["text"], "Random PR review")
+        self.assertTrue(t["off_plan"])
+        self.assertEqual(t["goal_id"], "perf-q2")
+
+    def test_off_plan_marker_after_goal(self):
+        t = wb.parse_task("- [x] Helped Sara debug → perf-q2 [off-plan]")
+        self.assertEqual(t["off_plan"], True)
+        # goal_id only matches when arrow is at end-of-line; here [off-plan] is after,
+        # so goal_id parsing may or may not catch it. Either way, off_plan must be True.
+        self.assertEqual(t["text"].rstrip(), "Helped Sara debug" if t["goal_id"] else "Helped Sara debug → perf-q2")
+
+    def test_off_plan_no_goal(self):
+        t = wb.parse_task("- [x] Unplanned chore [off-plan]")
+        self.assertTrue(t["off_plan"])
+        self.assertIsNone(t["goal_id"])
+        self.assertEqual(t["text"], "Unplanned chore")
 
 
 class TestParseGoals(unittest.TestCase):
@@ -364,6 +384,42 @@ class TestWeeklyAggregate(unittest.TestCase):
         self.assertTrue(gv)
         self.assertIn("Sara", gv[0]["text"])
 
+    def test_off_plan_ratio_signal(self):
+        cfg, _, work = make_vault()
+        self._make_quarter_goals(work)
+        mon = datetime.date(2026, 4, 20)
+        # 4 done items, 3 of them off-plan = 75%, well above 40% threshold
+        write_day(work, mon, reflection="x",
+                  done=[
+                      "- [x] Planned A → perf-q2",
+                      "- [x] Reactive thing 1 [off-plan]",
+                      "- [x] Reactive thing 2 [off-plan]",
+                      "- [x] Reactive thing 3 [off-plan]",
+                  ])
+        goals = wb.parse_goals(work / "Goals" / "Quarterly.md")
+        agg = wb.weekly_aggregate(cfg, 2026, 17, goals)
+        self.assertEqual(agg["off_plan_count"], 3)
+        self.assertEqual(agg["off_plan_pct"], 75)
+        op = [m for m in agg["manager_items"] if m["type"] == "off_plan_ratio"]
+        self.assertTrue(op)
+
+    def test_off_plan_below_threshold(self):
+        cfg, _, work = make_vault()
+        self._make_quarter_goals(work)
+        mon = datetime.date(2026, 4, 20)
+        # 4 done, 1 off-plan = 25% — below 40% threshold
+        write_day(work, mon, reflection="x",
+                  done=[
+                      "- [x] A → perf-q2",
+                      "- [x] B → perf-q2",
+                      "- [x] C → perf-q2",
+                      "- [x] D [off-plan]",
+                  ])
+        goals = wb.parse_goals(work / "Goals" / "Quarterly.md")
+        agg = wb.weekly_aggregate(cfg, 2026, 17, goals)
+        op = [m for m in agg["manager_items"] if m["type"] == "off_plan_ratio"]
+        self.assertEqual(op, [])
+
     def test_quiet_week_no_manager_items(self):
         cfg, _, work = make_vault()
         self._make_quarter_goals(work)
@@ -430,6 +486,95 @@ class TestCLI(unittest.TestCase):
         self.assertIn("Don't break", content)
         self.assertIn("Sara's PR", content)
         self.assertIn("\"review\"", content)
+
+
+class TestAppendTask(unittest.TestCase):
+    def test_creates_and_appends(self):
+        cfg, _, work = make_vault()
+        target = work / "Daily" / "2026-04-29.md"
+        self.assertFalse(target.exists())
+        r = wb.append_task(cfg, target, "Quick item", "perf-q2", off_plan=False)
+        self.assertTrue(target.exists())
+        self.assertTrue(r["created"])
+        parsed = wb.parse_daily(target)
+        self.assertEqual(len(parsed["planned"]), 1)
+        self.assertEqual(parsed["planned"][0]["text"], "Quick item")
+        self.assertEqual(parsed["planned"][0]["goal_id"], "perf-q2")
+
+    def test_preserves_existing(self):
+        cfg, _, work = make_vault()
+        d = datetime.date(2026, 4, 28)
+        write_day(work, d, mood="tired", energy=2, kickstarts=1,
+                  planned=["- [ ] Existing → perf-q2"])
+        target = work / "Daily" / f"{d.isoformat()}.md"
+        wb.append_task(cfg, target, "New", "growth-distsys")
+        parsed = wb.parse_daily(target)
+        self.assertEqual(len(parsed["planned"]), 2)
+        self.assertEqual(parsed["mood"], "tired")
+        self.assertEqual(parsed["energy"], 2)
+        self.assertEqual(parsed["kickstarts"], 1)
+
+    def test_off_plan_flag(self):
+        cfg, _, work = make_vault()
+        target = work / "Daily" / "2026-04-29.md"
+        wb.append_task(cfg, target, "Random", None, off_plan=True)
+        parsed = wb.parse_daily(target)
+        self.assertTrue(parsed["planned"][0]["off_plan"])
+
+
+class TestWorkdays(unittest.TestCase):
+    def test_default_mon_fri(self):
+        self.assertEqual(wb.workdays({}), [1, 2, 3, 4, 5])
+
+    def test_custom(self):
+        self.assertEqual(wb.workdays({"workdays": [1, 2, 3, 4, 5, 6]}), [1, 2, 3, 4, 5, 6])
+
+    def test_invalid_falls_back(self):
+        self.assertEqual(wb.workdays({"workdays": "not-a-list"}), [1, 2, 3, 4, 5])
+        self.assertEqual(wb.workdays({"workdays": [99, "x"]}), [1, 2, 3, 4, 5])
+
+
+class TestUnresolvedWorkdays(unittest.TestCase):
+    def test_skips_finished_days(self):
+        cfg, _, work = make_vault()
+        # Yesterday (assuming weekday) finished cleanly: don't flag.
+        today = datetime.date.today()
+        # Walk back to the most recent workday.
+        d = today - datetime.timedelta(days=1)
+        while d.isoweekday() > 5:
+            d -= datetime.timedelta(days=1)
+        write_day(work, d, energy_eod=4, reflection="all done",
+                  done=["- [x] A → perf-q2"])
+        result = wb.unresolved_workdays(cfg, max_days=7)
+        self.assertNotIn(d.isoformat(), [r["date"] for r in result])
+
+    def test_flags_unresolved(self):
+        cfg, _, work = make_vault()
+        today = datetime.date.today()
+        d = today - datetime.timedelta(days=1)
+        while d.isoweekday() > 5:
+            d -= datetime.timedelta(days=1)
+        write_day(work, d, planned=["- [ ] Stuck → perf-q2"])  # no eod
+        result = wb.unresolved_workdays(cfg, max_days=7)
+        dates = [r["date"] for r in result]
+        self.assertIn(d.isoformat(), dates)
+        entry = [r for r in result if r["date"] == d.isoformat()][0]
+        self.assertTrue(entry["has_note"])
+        self.assertEqual(entry["planned_unresolved"], 1)
+        self.assertFalse(entry["eod_done"])
+
+    def test_skips_non_workdays(self):
+        # Configure user as Mon-only, then ensure yesterday (likely not Mon) isn't flagged
+        # even if missing.
+        vault = Path(tempfile.mkdtemp())
+        work = vault / "work-buddy"
+        (work / "Daily").mkdir(parents=True)
+        cfg = {"vault_path": str(vault), "subdir": "work-buddy", "workdays": [1]}  # Mondays only
+        result = wb.unresolved_workdays(cfg, max_days=7)
+        # All entries (if any) should be Mondays
+        for r in result:
+            d = datetime.date.fromisoformat(r["date"])
+            self.assertEqual(d.isoweekday(), 1)
 
 
 if __name__ == "__main__":

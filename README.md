@@ -6,11 +6,17 @@ See [DESIGN.md](./DESIGN.md) for the full design document.
 
 ## Install
 
+**Claude Code:**
 ```bash
 ./install.sh
 ```
+Symlinks the repo into `~/.claude/skills/work-buddy`. Restart Claude Code.
 
-This symlinks the repo into `~/.claude/skills/work-buddy`. Restart Claude Code after running it.
+**Codex:**
+```bash
+./install-codex.sh
+```
+Runs `install.sh` first (the helper script lives in the same canonical place either way), then symlinks the bundled `INSTRUCTIONS.md` into `~/.codex/prompts/work-buddy.md`. Both clients share the same config and vault.
 
 ## First run
 
@@ -31,17 +37,21 @@ This symlinks the repo into `~/.claude/skills/work-buddy`. Restart Claude Code a
 | `/work-buddy eod` | End-of-day review: mark tasks done/missed, log wins and reflection |
 | `/work-buddy weekly` | Weekly review: aggregates, goal progress, blockers, reflection |
 | `/work-buddy kickstart` | Tired or stuck? Picks a tiny, valuable first move, explains why it matters, grants permission to stop after it |
+| `/work-buddy add` | Quick mid-day task append, prompts for goal link |
+| `/work-buddy catchup` | Backfill workdays you missed `eod` on — captures both planned-but-unreviewed work and **off-plan work you actually did** |
 
 Running `/work-buddy` with no argument auto-selects `morning` (if today has no plan) or `now` (if it does).
 
 ## What gets tracked
 
-- **Tasks** linked to quarterly goals (impact-ranked).
+- **Tasks** linked to quarterly goals (impact-ranked), with an `[off-plan]` marker for work you did that wasn't on the plan.
 - **Mood + energy** in each daily note's frontmatter (optional, low-friction).
 - **Kickstart usage** — counts how many times you needed a tiny-step nudge per day.
-- **Manager-discussion items** — auto-generated weekly from blockers, stalled goals, growth wins, workload signals, and goal alignment.
+- **Manager-discussion items** — auto-generated weekly from blockers, stalled goals, growth wins, workload signals, goal alignment, and **off-plan ratio** (≥40% of completed work being off-plan flags a clarity/reactivity convo).
 
-`/work-buddy morning` and `/work-buddy now` will gently suggest `/work-buddy kickstart` if recent signals look low (e.g. yesterday energy ≤2, 0 tasks done, or the same task carried 3+ days).
+`/work-buddy morning` will detect unresolved past workdays and offer to catch up before planning today. `/work-buddy now` will gently suggest `/work-buddy kickstart` if recent signals look low (e.g. yesterday energy ≤2, 0 tasks done, or the same task carried 3+ days).
+
+**Workdays** default Mon–Fri. Override with `"workdays": [1,2,3,4,5,6]` (ISO weekday: 1=Mon..7=Sun) in `~/.claude/skills/work-buddy/config.json`. Catchup respects this so non-workdays never get flagged.
 
 ## Vault layout
 

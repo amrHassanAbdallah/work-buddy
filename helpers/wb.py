@@ -70,6 +70,26 @@ def vault_work_dir(cfg: dict) -> Path:
     return Path(cfg["vault_path"]) / cfg.get("subdir", "work-buddy")
 
 
+DEFAULT_WORKDAYS = [1, 2, 3, 4, 5]  # ISO weekday: Mon=1 .. Sun=7
+
+
+def workdays(cfg: dict) -> list:
+    """Return the list of ISO weekday integers (1=Mon..7=Sun) the user works.
+    Default Mon–Fri. Override via 'workdays' in config.json (e.g. [1,2,3,4,5,6])."""
+    raw = cfg.get("workdays")
+    if not raw or not isinstance(raw, list):
+        return list(DEFAULT_WORKDAYS)
+    out = []
+    for v in raw:
+        try:
+            n = int(v)
+            if 1 <= n <= 7:
+                out.append(n)
+        except (ValueError, TypeError):
+            continue
+    return out or list(DEFAULT_WORKDAYS)
+
+
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
@@ -114,6 +134,7 @@ def week_range(iso_year: int, iso_week: int) -> tuple:
 
 TASK_RE = re.compile(r"^- \[( |x)\] (.+)$")
 GOAL_ID_RE = re.compile(r"→\s*([a-z0-9-]+)\s*$")
+OFF_PLAN_RE = re.compile(r"\[off-plan\]")
 
 
 def parse_task(line: str) -> "dict | None":
@@ -124,11 +145,17 @@ def parse_task(line: str) -> "dict | None":
     text_raw = m.group(2)
     goal_m = GOAL_ID_RE.search(text_raw)
     goal_id = goal_m.group(1) if goal_m else None
-    text = GOAL_ID_RE.sub("", text_raw).rstrip(" →").rstrip()
+    off_plan = bool(OFF_PLAN_RE.search(text_raw))
+    # Strip both markers from text in either order
+    text = text_raw
+    text = GOAL_ID_RE.sub("", text)
+    text = OFF_PLAN_RE.sub("", text)
+    text = text.rstrip(" →").rstrip()
     return {
         "text": text,
         "checked": checked,
         "goal_id": goal_id,
+        "off_plan": off_plan,
         "raw": line.rstrip(),
     }
 
@@ -363,9 +390,10 @@ def _tasks_to_md(tasks: list) -> str:
     for t in tasks:
         box = "x" if t.get("checked") else " "
         text = t.get("text", "").rstrip()
+        op = " [off-plan]" if t.get("off_plan") else ""
         goal_id = t.get("goal_id")
-        suffix = f" → {goal_id}" if goal_id else ""
-        lines.append(f"- [{box}] {text}{suffix}")
+        goal_suffix = f" → {goal_id}" if goal_id else ""
+        lines.append(f"- [{box}] {text}{op}{goal_suffix}")
     return "\n".join(lines)
 
 
@@ -475,6 +503,96 @@ def write_goals(data: dict, path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Append a task to today (or any day)
+# ---------------------------------------------------------------------------
+
+def append_task(cfg: dict, path: Path, text: str, goal_id: "str | None" = None,
+                off_plan: bool = False) -> dict:
+    """Append a task to a daily note's Planned section. Creates the note from
+    template if missing. Returns the parsed-then-rewritten doc summary."""
+    created = False
+    if not path.exists():
+        try:
+            d = datetime.date.fromisoformat(path.stem)
+        except ValueError:
+            d = datetime.date.today()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_daily(d), encoding="utf-8")
+        created = True
+    parsed = parse_daily(path)
+    new_task = {
+        "text": text.strip(),
+        "checked": False,
+        "goal_id": goal_id if goal_id else None,
+        "off_plan": bool(off_plan),
+        "raw": "",
+    }
+    parsed["planned"].append(new_task)
+    write_daily(parsed, path)
+    return {
+        "status": "ok",
+        "path": str(path),
+        "created": created,
+        "planned_count": len(parsed["planned"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Catchup — find unresolved workdays in the recent past
+# ---------------------------------------------------------------------------
+
+def _has_eod_evidence(parsed: dict) -> bool:
+    return (
+        parsed.get("energy_eod") is not None
+        or bool((parsed.get("reflection") or "").strip())
+        or len(parsed.get("done") or []) > 0
+        or len(parsed.get("missed") or []) > 0
+    )
+
+
+def unresolved_workdays(cfg: dict, max_days: int = 7) -> list:
+    """Look back `max_days` calendar days. For each WORKDAY (per cfg.workdays)
+    in that window, return one entry describing whether that day needs catchup.
+
+    Skips today. An entry is included if either:
+      - The day's note exists but lacks eod evidence (planned items unresolved
+        or no reflection/eod-energy/done/missed activity), OR
+      - The day's note doesn't exist at all (user may have worked off-record).
+    """
+    wds = set(workdays(cfg))
+    today = datetime.date.today()
+    out = []
+    for offset in range(1, max_days + 1):
+        d = today - datetime.timedelta(days=offset)
+        if d.isoweekday() not in wds:
+            continue
+        p = date_path(cfg, d)
+        if not p.exists():
+            out.append({
+                "date": d.isoformat(),
+                "weekday": d.strftime("%A"),
+                "has_note": False,
+                "planned_unresolved": 0,
+                "eod_done": False,
+            })
+            continue
+        parsed = parse_daily(p)
+        eod_done = _has_eod_evidence(parsed)
+        unresolved = sum(1 for t in parsed["planned"] if not t.get("checked"))
+        # Include if eod never ran, or if there are still unresolved items.
+        if eod_done and unresolved == 0:
+            continue
+        out.append({
+            "date": d.isoformat(),
+            "weekday": d.strftime("%A"),
+            "has_note": True,
+            "planned_unresolved": unresolved,
+            "eod_done": eod_done,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Kickstart counter
 # ---------------------------------------------------------------------------
 
@@ -540,6 +658,10 @@ def weekly_aggregate(cfg: dict, year: int, week: int, goals: list) -> dict:
     total_tasks = 0
     unlinked_tasks = 0
 
+    # For off-plan ratio (proportion of completed work that wasn't on the plan)
+    done_total = 0
+    done_off_plan = 0
+
     growth_wins = []
 
     for day in days_data:
@@ -555,6 +677,10 @@ def weekly_aggregate(cfg: dict, year: int, week: int, goals: list) -> dict:
             moods.append(day["mood"])
 
         # Per-goal tally
+        for t in day["done"]:
+            done_total += 1
+            if t.get("off_plan"):
+                done_off_plan += 1
         for section_name, section_tasks in (("planned", day["planned"]), ("done", day["done"]), ("missed", day["missed"])):
             for t in section_tasks:
                 total_tasks += 1
@@ -666,6 +792,13 @@ def weekly_aggregate(cfg: dict, year: int, week: int, goals: list) -> dict:
                 "text": f"{unlinked_pct}% of tasks this week ({unlinked_tasks}/{total_tasks}) weren't linked to any quarterly goal. Worth revisiting priorities together.",
             })
 
+    off_plan_pct = round(100 * done_off_plan / done_total) if done_total else 0
+    if done_total >= 3 and off_plan_pct >= 40:
+        manager_items.append({
+            "type": "off_plan_ratio",
+            "text": f"{off_plan_pct}% of completed work this week ({done_off_plan}/{done_total}) was off-plan. Could mean reactive workload, or that planning is missing stuff that actually matters.",
+        })
+
     return {
         "year": year,
         "week": week,
@@ -692,6 +825,8 @@ def weekly_aggregate(cfg: dict, year: int, week: int, goals: list) -> dict:
         "blockers": blockers,
         "manager_items": manager_items,
         "unlinked_pct": round(100 * unlinked_tasks / total_tasks) if total_tasks else 0,
+        "off_plan_pct": off_plan_pct,
+        "off_plan_count": done_off_plan,
     }
 
 
@@ -848,6 +983,15 @@ def get_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("kickstart-signals")
 
+    at = sub.add_parser("append-task")
+    at.add_argument("--path", help="Daily note path (defaults to today)")
+    at.add_argument("--text", required=True)
+    at.add_argument("--goal")
+    at.add_argument("--off-plan", action="store_true")
+
+    uw = sub.add_parser("unresolved-workdays")
+    uw.add_argument("--max-days", type=int, default=7)
+
     return p
 
 
@@ -960,6 +1104,17 @@ def main() -> None:
     elif args.cmd == "kickstart-signals":
         cfg = load_cfg()
         print(json.dumps(kickstart_signals(cfg), ensure_ascii=False))
+
+    elif args.cmd == "append-task":
+        cfg = load_cfg()
+        path = Path(args.path) if args.path else today_path(cfg)
+        result = append_task(cfg, path, args.text, args.goal, args.off_plan)
+        print(json.dumps(result))
+
+    elif args.cmd == "unresolved-workdays":
+        cfg = load_cfg()
+        result = unresolved_workdays(cfg, args.max_days)
+        print(json.dumps(result, ensure_ascii=False))
 
     else:
         parser.print_help()
