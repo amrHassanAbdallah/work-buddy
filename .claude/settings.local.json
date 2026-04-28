@@ -4,7 +4,10 @@
       "Bash(chmod +x *)",
       "Bash(python3 *)",
       "Read(//private/tmp/**)",
-      "Bash(cat)"
+      "Bash(cat)",
+      "Bash(git add *)",
+      "Bash(git -c user.name=amrHassanAbdallah -c user.email=futuremakers.ame@gmail.com commit -m 'feat: add /work-buddy kickstart for low-energy days *)",
+      "Bash(git push *)"
     ]
   }
 }

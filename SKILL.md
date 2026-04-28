@@ -62,6 +62,7 @@ Then: `test -f "<path>" && echo "exists" || echo "missing"`
 | `now`    | `commands/now.md`               |
 | `eod`    | `commands/eod.md`               |
 | `weekly` | `commands/weekly.md`            |
+| `kickstart` | `commands/kickstart.md`      |
 
 Read the corresponding `commands/<sub>.md` file and follow its instructions exactly.
 
@@ -77,6 +78,7 @@ Print:
 > - `/work-buddy now`     — What to work on right now (one task)
 > - `/work-buddy eod`     — End-of-day review: mark done/missed, log wins
 > - `/work-buddy weekly`  — Weekly review and reflection
+> - `/work-buddy kickstart` — Tired/stuck? Picks a tiny, valuable first move and explains why it matters
 > 
 > Run with no argument to auto-detect: morning if today has no plan, now if it does."
 

@@ -53,6 +53,9 @@ Read `commands/eod.md`. Walk through each planned task (done/missed/partial/canc
 ### weekly
 Read `commands/weekly.md`. Aggregate all daily notes for the current ISO week, compute stats and goal progress, detect blockers, prompt for reflection, write weekly note.
 
+### kickstart
+Read `commands/kickstart.md`. For low-energy / unmotivated moments: pick one valuable task, decompose it to a 2-minute physical starter, surface why it matters via the linked goal's target, and grant explicit permission to stop after the starter.
+
 ## wb.py subcommand reference
 
 ```

@@ -30,6 +30,7 @@ This symlinks the repo into `~/.claude/skills/work-buddy`. Restart Claude Code a
 | `/work-buddy now` | Get one task to work on right now (highest impact, unchecked) |
 | `/work-buddy eod` | End-of-day review: mark tasks done/missed, log wins and reflection |
 | `/work-buddy weekly` | Weekly review: aggregates, goal progress, blockers, reflection |
+| `/work-buddy kickstart` | Tired or stuck? Picks a tiny, valuable first move, explains why it matters, grants permission to stop after it |
 
 Running `/work-buddy` with no argument auto-selects `morning` (if today has no plan) or `now` (if it does).
 

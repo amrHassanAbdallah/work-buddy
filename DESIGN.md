@@ -136,6 +136,20 @@ The skill is invoked as `/work-buddy <subcommand>`. The router is `SKILL.md`; ea
 5. Prompt: "Any wins to log?" — appended to *Wins*.
 6. Write the note. Print summary: `3 done · 1 missed · 2 wins`.
 
+### `/work-buddy kickstart`
+
+For low-energy / unmotivated / stuck moments. The premise: when you're tired, the bottleneck isn't picking a different task — it's making the *first move* on a valuable one absurdly small.
+
+1. Brief check-in on state (tired, scattered, blocked) — acknowledge, don't analyze.
+2. Load today's plan (or fall back to yesterday's carry-overs, or synthesize from goals if fresh user).
+3. Score candidate tasks: linked-to-goal beats unlinked, then sort by `impact` desc, tiebreak by carry-over.
+4. Pick one. Decompose into a **2-minute physical starter**: open, type, run, read, scroll. Never abstract ("think about", "consider").
+5. Surface meaning by reading the linked goal's `target` + `notes`. Connect the starter explicitly to the end-of-quarter outcome. For `type: growth` goals, note that the value is in the practice, not the output.
+6. Grant **explicit permission to stop** after the starter. Removing the obligation to continue is what makes starting feasible.
+7. If the user reports "done", log the starter as a win in today's note immediately and do NOT push for another task.
+
+Tone is non-negotiable: specific, never generic-cheerleader. "Even 60 seconds of looking at the cache panel rules out half the hypotheses" beats "you got this!" every time.
+
 ### `/work-buddy weekly`
 
 1. Determine ISO week. List daily notes in that range.
