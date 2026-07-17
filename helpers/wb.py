@@ -550,6 +550,22 @@ def _has_eod_evidence(parsed: dict) -> bool:
     )
 
 
+def earliest_daily_note(cfg: dict) -> "datetime.date | None":
+    """Return the date of the earliest daily note that exists, or None if there
+    are no daily notes yet. Used as an adoption floor so the unresolved check
+    never flags days from before the user started using work-buddy."""
+    daily_dir = vault_work_dir(cfg) / "Daily"
+    if not daily_dir.exists():
+        return None
+    dates = []
+    for p in daily_dir.glob("*.md"):
+        try:
+            dates.append(datetime.date.fromisoformat(p.stem))
+        except ValueError:
+            continue
+    return min(dates) if dates else None
+
+
 def unresolved_workdays(cfg: dict, max_days: int = 7) -> list:
     """Look back `max_days` calendar days. For each WORKDAY (per cfg.workdays)
     in that window, return one entry describing whether that day needs catchup.
@@ -558,13 +574,22 @@ def unresolved_workdays(cfg: dict, max_days: int = 7) -> list:
       - The day's note exists but lacks eod evidence (planned items unresolved
         or no reflection/eod-energy/done/missed activity), OR
       - The day's note doesn't exist at all (user may have worked off-record).
+
+    Days before the user's first-ever daily note (the adoption floor) are never
+    flagged as "no note" — that's pre-adoption history, not a forgotten day.
+    If there are no notes at all, nothing is flagged.
     """
     wds = set(workdays(cfg))
     today = datetime.date.today()
+    floor = earliest_daily_note(cfg)
+    if floor is None:
+        return []
     out = []
     for offset in range(1, max_days + 1):
         d = today - datetime.timedelta(days=offset)
         if d.isoweekday() not in wds:
+            continue
+        if d < floor:
             continue
         p = date_path(cfg, d)
         if not p.exists():

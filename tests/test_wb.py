@@ -584,6 +584,28 @@ class TestUnresolvedWorkdays(unittest.TestCase):
             d = datetime.date.fromisoformat(r["date"])
             self.assertEqual(d.isoweekday(), 1)
 
+    def test_empty_vault_flags_nothing(self):
+        # No notes at all → adoption floor is None → nothing flagged (a brand-new
+        # user shouldn't be told they "forgot" days they were never using the tool for).
+        cfg, _, work = make_vault()
+        self.assertEqual(wb.unresolved_workdays(cfg, max_days=7), [])
+
+    def test_adoption_floor_excludes_pre_first_note_days(self):
+        # First note is a recent workday that's fully resolved. Days BEFORE it must
+        # not appear as "no note", even though those files are missing.
+        cfg, _, work = make_vault()
+        first = self._recent_resolved_workday(work)
+        result = wb.unresolved_workdays(cfg, max_days=7)
+        for r in result:
+            self.assertGreaterEqual(datetime.date.fromisoformat(r["date"]), first)
+
+    def _recent_resolved_workday(self, work):
+        d = datetime.date.today() - datetime.timedelta(days=1)
+        while d.isoweekday() > 5:
+            d -= datetime.timedelta(days=1)
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        return d
+
 
 class TestReminder(unittest.TestCase):
     def _recent_workday(self):
