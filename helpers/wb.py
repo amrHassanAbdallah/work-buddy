@@ -996,6 +996,158 @@ def weekly_aggregate(cfg: dict, year: int, week: int, goals: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Manager report — outward-facing weekly impact digest (Phase 1)
+# ---------------------------------------------------------------------------
+#
+# weekly_aggregate is inward-facing (self-review counts). manager_report walks
+# the same week but keeps the actual completed-task text + goal linkage so it
+# can produce impact statements a manager reads: what shipped, tied to which
+# goal, and what cross-team / beyond-scope work happened. Draft only — the
+# command layer writes it to a note the user reviews and sends themselves.
+
+# High-impact threshold: goals at this impact or above lead the report.
+HIGH_IMPACT = 4
+
+
+def _report_line(task: dict, goal: "dict | None") -> dict:
+    """Shape one completed task into a report entry with goal context."""
+    return {
+        "text": task.get("text", "").strip(),
+        "goal_id": task.get("goal_id"),
+        "goal_title": goal.get("title", "") if goal else "",
+        "impact": goal.get("impact", 0) if goal else 0,
+        "off_plan": bool(task.get("off_plan")),
+    }
+
+
+def manager_report(cfg: dict, year: int, week: int, goals: list) -> dict:
+    """Build an outward-facing weekly impact report from completed work.
+
+    Buckets completed tasks into:
+      - highest_impact: done tasks linked to a goal with impact >= HIGH_IMPACT,
+        sorted by impact desc.
+      - beyond_scope: off-plan done work, OR done work linked to a lower-impact
+        goal — the "expanded beyond my lane" story managers often miss.
+      - other: remaining completed work (linked, mid-impact, on-plan).
+    Also carries wins and a per-goal progress snapshot for context.
+
+    Returns the structured buckets plus a rendered markdown draft. Empty weeks
+    yield an empty-but-valid report (no crash, honest "nothing logged" markdown).
+    """
+    monday, sunday = week_range(year, week)
+    goal_by_id = {g["id"]: g for g in goals if g.get("id")}
+
+    highest, beyond, other = [], [], []
+    wins = []
+    seen_win = set()
+    done_total = 0
+
+    for d in _all_week_dates(year, week):
+        p = date_path(cfg, d)
+        if not p.exists():
+            continue
+        parsed = parse_daily(p)
+        for t in parsed["done"]:
+            done_total += 1
+            gid = t.get("goal_id")
+            goal = goal_by_id.get(gid) if gid else None
+            entry = _report_line(t, goal)
+            if entry["off_plan"]:
+                beyond.append(entry)
+            elif goal and goal.get("impact", 0) >= HIGH_IMPACT:
+                highest.append(entry)
+            elif goal:
+                # linked but below the high bar — still worth showing, but as
+                # steady progress rather than headline.
+                other.append(entry)
+            else:
+                # unlinked on-plan work — reactive/keep-the-lights-on; goes to
+                # "other" so it doesn't crowd out impact, but isn't dropped.
+                other.append(entry)
+        for w in parsed["wins"]:
+            txt = w.get("text", "").strip()
+            if txt and txt not in seen_win:
+                seen_win.add(txt)
+                gid = w.get("goal_id")
+                wins.append(_report_line(w, goal_by_id.get(gid) if gid else None))
+
+    highest.sort(key=lambda e: -e["impact"])
+
+    # Per-goal progress snapshot (reuse the aggregator's math for consistency).
+    agg = weekly_aggregate(cfg, year, week, goals)
+    per_goal = [g for g in agg["per_goal"] if (g["done"] + g["planned"] + g["missed"]) > 0]
+    goals_advanced = sum(1 for g in per_goal if g["done"] > 0)
+    cross_team = sum(1 for e in beyond if e["off_plan"])
+
+    markdown = _render_manager_report(
+        year, week, monday, sunday,
+        highest, beyond, other, wins,
+        done_total, goals_advanced, cross_team,
+    )
+
+    return {
+        "year": year,
+        "week": week,
+        "monday": monday.isoformat(),
+        "sunday": sunday.isoformat(),
+        "summary": {
+            "shipped": done_total,
+            "goals_advanced": goals_advanced,
+            "cross_team": cross_team,
+        },
+        "highest_impact": highest,
+        "beyond_scope": beyond,
+        "other": other,
+        "wins": wins,
+        "per_goal": per_goal,
+        "markdown": markdown,
+    }
+
+
+def _render_manager_report(year, week, monday, sunday, highest, beyond, other,
+                           wins, shipped, goals_advanced, cross_team) -> str:
+    """Render the report buckets into a paste-ready markdown draft."""
+    wk = f"{year}-W{week:02d}"
+    lines = [
+        f"# Weekly impact — {wk}",
+        f"_{monday.isoformat()} → {sunday.isoformat()}_",
+        "",
+        f"**{goals_advanced} goal(s) advanced · {shipped} shipped · {cross_team} cross-team / off-plan**",
+    ]
+
+    def bullet(e: dict) -> str:
+        goal = f" — _{e['goal_title']}_ (impact {e['impact']})" if e["goal_title"] else ""
+        return f"- {e['text']}{goal}"
+
+    if highest:
+        lines += ["", "## Highest impact"]
+        lines += [bullet(e) for e in highest]
+
+    if beyond:
+        lines += ["", "## Beyond my scope"]
+        for e in beyond:
+            goal = f" — _{e['goal_title']}_" if e["goal_title"] else ""
+            lines.append(f"- {e['text']}{goal}")
+
+    if other:
+        lines += ["", "## Also shipped"]
+        lines += [bullet(e) for e in other]
+
+    if wins:
+        lines += ["", "## Wins"]
+        for e in wins:
+            goal = f" — _{e['goal_title']}_" if e["goal_title"] else ""
+            lines.append(f"- {e['text']}{goal}")
+
+    if not (highest or beyond or other or wins):
+        lines += ["", "_No completed work logged this week._"]
+
+    lines += ["", "---",
+              "_Drafted by work-buddy from this week's daily notes. Review and edit before sending._"]
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Signal detection for proactive kickstart suggestion
 # ---------------------------------------------------------------------------
 
@@ -1146,6 +1298,10 @@ def get_parser() -> argparse.ArgumentParser:
     wa.add_argument("--year", type=int)
     wa.add_argument("--week", type=int)
 
+    mr = sub.add_parser("manager-report")
+    mr.add_argument("--year", type=int)
+    mr.add_argument("--week", type=int)
+
     sub.add_parser("kickstart-signals")
 
     at = sub.add_parser("append-task")
@@ -1275,6 +1431,17 @@ def main() -> None:
         goals_path = vault_work_dir(cfg) / "Goals" / "Quarterly.md"
         goals = parse_goals(goals_path) if goals_path.exists() else []
         result = weekly_aggregate(cfg, y, w, goals)
+        print(json.dumps(result, ensure_ascii=False))
+
+    elif args.cmd == "manager-report":
+        cfg = load_cfg()
+        if args.year and args.week:
+            y, w = args.year, args.week
+        else:
+            y, w = iso_week_for(datetime.date.today())
+        goals_path = vault_work_dir(cfg) / "Goals" / "Quarterly.md"
+        goals = parse_goals(goals_path) if goals_path.exists() else []
+        result = manager_report(cfg, y, w, goals)
         print(json.dumps(result, ensure_ascii=False))
 
     elif args.cmd == "kickstart-signals":

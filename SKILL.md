@@ -78,6 +78,7 @@ Then: `test -f "<path>" && echo "exists" || echo "missing"`
 | `now`    | `commands/now.md`               |
 | `eod`    | `commands/eod.md`               |
 | `weekly` | `commands/weekly.md`            |
+| `report` | `commands/report.md`            |
 | `kickstart` | `commands/kickstart.md`      |
 | `add`    | `commands/add.md`               |
 | `catchup`| `commands/catchup.md`           |
@@ -96,6 +97,7 @@ Print:
 > - `/work-buddy now`     — What to work on right now (one task)
 > - `/work-buddy eod`     — End-of-day review: mark done/missed, log wins
 > - `/work-buddy weekly`  — Weekly review and reflection
+> - `/work-buddy report`  — Draft a manager-facing weekly impact update (what shipped, tied to goals)
 > - `/work-buddy kickstart` — Tired/stuck? Picks a tiny, valuable first move and explains why it matters
 > - `/work-buddy add`      — Quick mid-day task append with goal-link prompt
 > - `/work-buddy catchup`  — Backfill missed eod days (incl. off-plan work you did)

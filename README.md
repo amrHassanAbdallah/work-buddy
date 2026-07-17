@@ -36,6 +36,7 @@ Runs `install.sh` first (the helper script lives in the same canonical place eit
 | `/work-buddy now` | Get one task to work on right now (highest impact, unchecked) |
 | `/work-buddy eod` | End-of-day review: mark tasks done/missed, log wins and reflection |
 | `/work-buddy weekly` | Weekly review: aggregates, goal progress, blockers, reflection |
+| `/work-buddy report` | Draft a **manager-facing** weekly impact update — what shipped, ranked by goal impact, with cross-team/off-plan work surfaced. Saved to `Manager-Updates/`; you review and send |
 | `/work-buddy kickstart` | Tired or stuck? Picks a tiny, valuable first move, explains why it matters, grants permission to stop after it |
 | `/work-buddy add` | Quick mid-day task append, prompts for goal link |
 | `/work-buddy catchup` | Backfill workdays you missed `eod` on — captures both planned-but-unreviewed work and **off-plan work you actually did** |
@@ -50,6 +51,16 @@ Running `/work-buddy` with no argument auto-selects `morning` (if today has no p
 - **Manager-discussion items** — auto-generated weekly from blockers, stalled goals, growth wins, workload signals, goal alignment, and **off-plan ratio** (≥40% of completed work being off-plan flags a clarity/reactivity convo).
 
 Every command (`morning`, `now`, `add`, `kickstart`, and the no-arg path) runs an **unresolved-days pre-flight** — the moment you open the tool it checks whether you skipped `eod` on a recent workday and offers to catch up, so a forgotten day surfaces on its own instead of silently piling up. `/work-buddy now` will also gently suggest `/work-buddy kickstart` if recent signals look low (e.g. yesterday energy ≤2, 0 tasks done, or the same task carried 3+ days).
+
+## Manager visibility
+
+Logged work that never reaches your manager shows up as a rating gap. `/work-buddy report` turns the week's daily notes into a **manager-facing impact draft** — completed work reframed as impact statements, ranked by goal impact score, with cross-team and off-plan work pulled to the front (the "expanded beyond my lane" story that's easy to miss). It's the outward counterpart to `weekly`'s inward self-review.
+
+```bash
+/work-buddy report          # draft this week's impact update
+```
+
+Drafts save to `Manager-Updates/YYYY-Wnn.md` in your vault. **Draft-only** — you review and send. Slack delivery is opt-in and gated: it only sends after showing you the exact text and getting a yes, and only when you've set a `slack_webhook`.
 
 ## Reminders (scheduled push)
 
@@ -81,9 +92,10 @@ python3 ~/.claude/skills/work-buddy/helpers/wb.py notify --channel macos --force
 
 ```
 <vault>/work-buddy/
-├── Goals/Quarterly.md   ← source of truth for goals
-├── Daily/YYYY-MM-DD.md  ← one file per day
-└── Weekly/YYYY-Wnn.md   ← one file per week
+├── Goals/Quarterly.md         ← source of truth for goals
+├── Daily/YYYY-MM-DD.md        ← one file per day
+├── Weekly/YYYY-Wnn.md         ← one file per week
+└── Manager-Updates/YYYY-Wnn.md ← manager-facing impact drafts (from /work-buddy report)
 ```
 
 ## Requirements

@@ -441,6 +441,99 @@ class TestWeeklyAggregate(unittest.TestCase):
 
 
 # -----------------------------------------------------------------------------
+# Manager report — outward-facing weekly impact digest
+# -----------------------------------------------------------------------------
+
+class TestManagerReport(unittest.TestCase):
+    def _goals(self, work):
+        (work / "Goals" / "Quarterly.md").write_text("""# Q
+
+## G1: AV flow
+- id: av-flow
+- impact: 5
+- type: delivery
+
+## G2: Bookmark manager
+- id: bookmark-mgr
+- impact: 4
+- type: delivery
+
+## G3: Docs cleanup
+- id: docs
+- impact: 2
+- type: delivery
+""")
+        return wb.parse_goals(work / "Goals" / "Quarterly.md")
+
+    def test_buckets_by_impact_and_off_plan(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        # Fully-past week 17 (Apr 20-26) so all days are counted.
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow"])
+        write_day(work, mon + datetime.timedelta(days=1), energy_eod=4, reflection="x",
+                  done=["- [x] Shipped bookmark support → bookmark-mgr",
+                        "- [x] Owned DH ETA launch [off-plan]"])
+        write_day(work, mon + datetime.timedelta(days=2), energy_eod=4, reflection="x",
+                  done=["- [x] Fixed README typo → docs",
+                        "- [x] Unlinked chore"])
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+
+        self.assertEqual(rep["summary"]["shipped"], 5)
+        self.assertEqual(rep["summary"]["goals_advanced"], 3)
+        self.assertEqual(rep["summary"]["cross_team"], 1)
+
+        highest = [e["text"] for e in rep["highest_impact"]]
+        self.assertEqual(highest, ["Finalized AV flow", "Shipped bookmark support"])
+        # sorted by impact desc: av-flow (5) before bookmark-mgr (4)
+        self.assertEqual(rep["highest_impact"][0]["impact"], 5)
+
+        beyond = [e["text"] for e in rep["beyond_scope"]]
+        self.assertEqual(beyond, ["Owned DH ETA launch"])
+
+        other = [e["text"] for e in rep["other"]]
+        self.assertIn("Fixed README typo", other)   # linked but impact 2
+        self.assertIn("Unlinked chore", other)       # no goal link
+
+    def test_markdown_has_sections(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow",
+                        "- [x] Owned DH ETA launch [off-plan]"])
+        md = wb.manager_report(cfg, 2026, 17, goals)["markdown"]
+        self.assertIn("# Weekly impact — 2026-W17", md)
+        self.assertIn("## Highest impact", md)
+        self.assertIn("## Beyond my scope", md)
+        self.assertIn("(impact 5)", md)
+        self.assertIn("Review and edit before sending", md)
+
+    def test_empty_week_is_valid(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+        self.assertEqual(rep["summary"]["shipped"], 0)
+        self.assertIn("No completed work logged", rep["markdown"])
+        self.assertEqual(rep["highest_impact"], [])
+
+    def test_cli_manager_report(self):
+        cfg, cfg_path, work = make_vault()
+        self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "manager-report", "--year", "2026", "--week", "17"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["summary"]["shipped"], 1)
+        self.assertIn("Highest impact", data["markdown"])
+
+
+# -----------------------------------------------------------------------------
 # CLI integration — including --from-file
 # -----------------------------------------------------------------------------
 
