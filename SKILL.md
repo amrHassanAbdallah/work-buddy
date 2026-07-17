@@ -35,6 +35,22 @@ echo "exit:$?"
 - Exit 0 → proceed with the requested subcommand.
 - Exit 1 or 2 → tell the user config is missing or vault path is invalid, then run the `init` subcommand (read `commands/init.md`).
 
+## Unresolved-days pre-flight (run before `morning`, `now`, `add`, `kickstart`, and the no-argument path)
+
+This is the in-tool safety net for the common "I forgot to log a day" problem: it surfaces the moment the user opens the tool, regardless of which command they reached for. Skip it for `init`, `goals`, `catchup` (it *is* the catchup flow), and `weekly` (it has its own review).
+
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py \
+  --config ~/.claude/skills/work-buddy/config.json \
+  reminder-status
+```
+
+Returns `{"needs_reminder": bool, "unresolved": [...], "message": str}`. If `needs_reminder` is true, surface **once**, low-pressure, then continue with whatever the user asked for:
+
+> "Before we dive in — <message>. Want to `/work-buddy catchup` first, or keep going?"
+
+Do not block. If the user keeps going, proceed with the requested subcommand. `morning`'s own Step 0 covers the same ground, so if you're routing to `morning`, let it handle this and don't double-prompt.
+
 ## Routing
 
 The skill is invoked as `/work-buddy [subcommand]`.
@@ -62,6 +78,7 @@ Then: `test -f "<path>" && echo "exists" || echo "missing"`
 | `now`    | `commands/now.md`               |
 | `eod`    | `commands/eod.md`               |
 | `weekly` | `commands/weekly.md`            |
+| `report` | `commands/report.md`            |
 | `kickstart` | `commands/kickstart.md`      |
 | `add`    | `commands/add.md`               |
 | `catchup`| `commands/catchup.md`           |
@@ -80,6 +97,7 @@ Print:
 > - `/work-buddy now`     — What to work on right now (one task)
 > - `/work-buddy eod`     — End-of-day review: mark done/missed, log wins
 > - `/work-buddy weekly`  — Weekly review and reflection
+> - `/work-buddy report`  — Draft a manager-facing weekly impact update (what shipped, tied to goals)
 > - `/work-buddy kickstart` — Tired/stuck? Picks a tiny, valuable first move and explains why it matters
 > - `/work-buddy add`      — Quick mid-day task append with goal-link prompt
 > - `/work-buddy catchup`  — Backfill missed eod days (incl. off-plan work you did)

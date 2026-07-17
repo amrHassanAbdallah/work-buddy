@@ -132,30 +132,53 @@ def week_range(iso_year: int, iso_week: int) -> tuple:
 # Task parsing
 # ---------------------------------------------------------------------------
 
-TASK_RE = re.compile(r"^- \[( |x)\] (.+)$")
+TASK_RE = re.compile(r"^- \[( |x|X)\] (.+)$")
 GOAL_ID_RE = re.compile(r"→\s*([a-z0-9-]+)\s*$")
 OFF_PLAN_RE = re.compile(r"\[off-plan\]")
+WITH_RE = re.compile(r"\[with:\s*([a-z0-9][a-z0-9 ,-]*?)\s*\]")
+# Impact is a free-text trailing clause, introduced by " — impact: ".
+# Captured greedily to end-of-line, so it must be stripped before the goal
+# marker (which is also end-anchored).
+IMPACT_RE = re.compile(r"\s*[—-]\s*impact:\s*(.+?)\s*$")
 
 
 def parse_task(line: str) -> "dict | None":
     m = TASK_RE.match(line.rstrip())
     if not m:
         return None
-    checked = m.group(1) == "x"
+    checked = m.group(1) in ("x", "X")
     text_raw = m.group(2)
-    goal_m = GOAL_ID_RE.search(text_raw)
-    goal_id = goal_m.group(1) if goal_m else None
+
     off_plan = bool(OFF_PLAN_RE.search(text_raw))
-    # Strip both markers from text in either order
+
+    # Cross-team tag: [with: devops] / [with: geo-data]. May list multiple
+    # comma-separated teams. Stored as a normalized list.
+    with_teams = []
+    wm = WITH_RE.search(text_raw)
+    if wm:
+        with_teams = [t.strip() for t in wm.group(1).split(",") if t.strip()]
+
+    # Strip markers in an order that keeps each subsequent regex valid.
+    # 1. impact clause (outermost trailing), 2. off-plan, 3. with-tag,
+    # 4. goal marker (now safely at end-of-line).
     text = text_raw
-    text = GOAL_ID_RE.sub("", text)
+    im = IMPACT_RE.search(text)
+    impact = im.group(1).strip() if im else None
+    text = IMPACT_RE.sub("", text)
     text = OFF_PLAN_RE.sub("", text)
-    text = text.rstrip(" →").rstrip()
+    text = WITH_RE.sub("", text)
+    goal_m = GOAL_ID_RE.search(text)
+    goal_id = goal_m.group(1) if goal_m else None
+    text = GOAL_ID_RE.sub("", text)
+    # Collapse any double spaces left by mid-line marker removal.
+    text = re.sub(r"\s{2,}", " ", text).rstrip(" →").strip()
     return {
         "text": text,
         "checked": checked,
         "goal_id": goal_id,
         "off_plan": off_plan,
+        "with_teams": with_teams,
+        "impact": impact,
         "raw": line.rstrip(),
     }
 
@@ -385,15 +408,23 @@ def render_weekly(iso_year: int, iso_week: int, ctx: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _tasks_to_md(tasks: list) -> str:
-    """Always rebuild from fields so checked-state and goal-id changes round-trip."""
+    """Always rebuild from fields so state changes round-trip.
+
+    Marker order matches parse_task's strip order so a written line re-parses
+    identically: text [with:...] [off-plan] → goal — impact: ...
+    """
     lines = []
     for t in tasks:
         box = "x" if t.get("checked") else " "
         text = t.get("text", "").rstrip()
+        teams = t.get("with_teams") or []
+        with_suffix = f" [with: {', '.join(teams)}]" if teams else ""
         op = " [off-plan]" if t.get("off_plan") else ""
         goal_id = t.get("goal_id")
         goal_suffix = f" → {goal_id}" if goal_id else ""
-        lines.append(f"- [{box}] {text}{op}{goal_suffix}")
+        impact = (t.get("impact") or "").strip()
+        impact_suffix = f" — impact: {impact}" if impact else ""
+        lines.append(f"- [{box}] {text}{with_suffix}{op}{goal_suffix}{impact_suffix}")
     return "\n".join(lines)
 
 
@@ -507,7 +538,7 @@ def write_goals(data: dict, path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def append_task(cfg: dict, path: Path, text: str, goal_id: "str | None" = None,
-                off_plan: bool = False) -> dict:
+                off_plan: bool = False, with_teams: "list | None" = None) -> dict:
     """Append a task to a daily note's Planned section. Creates the note from
     template if missing. Returns the parsed-then-rewritten doc summary."""
     created = False
@@ -525,6 +556,8 @@ def append_task(cfg: dict, path: Path, text: str, goal_id: "str | None" = None,
         "checked": False,
         "goal_id": goal_id if goal_id else None,
         "off_plan": bool(off_plan),
+        "with_teams": with_teams or [],
+        "impact": None,
         "raw": "",
     }
     parsed["planned"].append(new_task)
@@ -550,6 +583,22 @@ def _has_eod_evidence(parsed: dict) -> bool:
     )
 
 
+def earliest_daily_note(cfg: dict) -> "datetime.date | None":
+    """Return the date of the earliest daily note that exists, or None if there
+    are no daily notes yet. Used as an adoption floor so the unresolved check
+    never flags days from before the user started using work-buddy."""
+    daily_dir = vault_work_dir(cfg) / "Daily"
+    if not daily_dir.exists():
+        return None
+    dates = []
+    for p in daily_dir.glob("*.md"):
+        try:
+            dates.append(datetime.date.fromisoformat(p.stem))
+        except ValueError:
+            continue
+    return min(dates) if dates else None
+
+
 def unresolved_workdays(cfg: dict, max_days: int = 7) -> list:
     """Look back `max_days` calendar days. For each WORKDAY (per cfg.workdays)
     in that window, return one entry describing whether that day needs catchup.
@@ -558,13 +607,22 @@ def unresolved_workdays(cfg: dict, max_days: int = 7) -> list:
       - The day's note exists but lacks eod evidence (planned items unresolved
         or no reflection/eod-energy/done/missed activity), OR
       - The day's note doesn't exist at all (user may have worked off-record).
+
+    Days before the user's first-ever daily note (the adoption floor) are never
+    flagged as "no note" — that's pre-adoption history, not a forgotten day.
+    If there are no notes at all, nothing is flagged.
     """
     wds = set(workdays(cfg))
     today = datetime.date.today()
+    floor = earliest_daily_note(cfg)
+    if floor is None:
+        return []
     out = []
     for offset in range(1, max_days + 1):
         d = today - datetime.timedelta(days=offset)
         if d.isoweekday() not in wds:
+            continue
+        if d < floor:
             continue
         p = date_path(cfg, d)
         if not p.exists():
@@ -590,6 +648,146 @@ def unresolved_workdays(cfg: dict, max_days: int = 7) -> list:
             "eod_done": eod_done,
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# Reminders / notifications
+# ---------------------------------------------------------------------------
+
+def _eod_logged_today(cfg: dict) -> bool:
+    """True if today's note exists and shows eod evidence (already closed out)."""
+    p = today_path(cfg)
+    if not p.exists():
+        return False
+    return _has_eod_evidence(parse_daily(p))
+
+
+def reminder_status(cfg: dict, max_days: int = 7) -> dict:
+    """Compute what, if anything, is worth reminding the user about.
+
+    Returns:
+      {
+        "needs_reminder": bool,
+        "unresolved": [ ...unresolved_workdays entries... ],
+        "today_eod_done": bool,
+        "title": str,
+        "message": str,   # short, human, notification-ready ("" if nothing)
+      }
+    A reminder is warranted when there are unresolved past workdays. Today's
+    own eod is reported but does not by itself trigger a reminder — the schedule
+    (e.g. a 17:30 job) decides whether "close out today" is relevant.
+    """
+    unresolved = unresolved_workdays(cfg, max_days)
+    today_done = _eod_logged_today(cfg)
+
+    if not unresolved:
+        return {
+            "needs_reminder": False,
+            "unresolved": [],
+            "today_eod_done": today_done,
+            "title": "work-buddy",
+            "message": "",
+        }
+
+    # Build a compact human summary of the outstanding days.
+    parts = []
+    for u in unresolved:
+        if not u["has_note"]:
+            parts.append(f"{u['weekday']} (no note)")
+        elif u["planned_unresolved"]:
+            parts.append(f"{u['weekday']} ({u['planned_unresolved']} open)")
+        else:
+            parts.append(u["weekday"])
+    n = len(unresolved)
+    day_word = "day" if n == 1 else "days"
+    message = f"{n} unresolved work{day_word}: " + ", ".join(parts) + ". Run /work-buddy catchup."
+    return {
+        "needs_reminder": True,
+        "unresolved": unresolved,
+        "today_eod_done": today_done,
+        "title": "work-buddy",
+        "message": message,
+    }
+
+
+def _notify_macos(title: str, message: str) -> bool:
+    """Fire a macOS notification banner via osascript. Best-effort."""
+    if not shutil.which("osascript"):
+        return False
+    # Escape double quotes for the AppleScript string literals.
+    safe_msg = message.replace('"', '\\"')
+    safe_title = title.replace('"', '\\"')
+    script = f'display notification "{safe_msg}" with title "{safe_title}"'
+    try:
+        import subprocess
+        subprocess.run(["osascript", "-e", script], check=False,
+                       capture_output=True, timeout=10)
+        return True
+    except Exception:
+        return False
+
+
+def _notify_slack(webhook_url: str, message: str) -> bool:
+    """Post a message to a Slack incoming-webhook URL. Stdlib-only (urllib)."""
+    if not webhook_url:
+        return False
+    import urllib.request
+    import urllib.error
+    payload = json.dumps({"text": message}).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def notify(cfg: dict, channel: str, max_days: int = 7, force: bool = False) -> dict:
+    """Run the reminder check and deliver via `channel`.
+
+    channel: "stdout" | "macos" | "slack" | "auto"
+      - "auto" delivers via macOS if available AND a slack_webhook is configured
+        it also posts to Slack. Falls back to stdout.
+    Set force=True to emit even when there's nothing outstanding (useful for
+    testing the pipe end-to-end).
+    Returns the reminder_status dict augmented with {"delivered": [channels]}.
+    """
+    status = reminder_status(cfg, max_days)
+    delivered: list = []
+
+    if not status["needs_reminder"] and not force:
+        status["delivered"] = delivered
+        return status
+
+    msg = status["message"] or "work-buddy: reminder check (nothing outstanding)."
+    title = status["title"]
+
+    channels = [channel]
+    if channel == "auto":
+        channels = ["macos", "slack"]
+
+    for ch in channels:
+        if ch == "stdout":
+            print(msg)
+            delivered.append("stdout")
+        elif ch == "macos":
+            if _notify_macos(title, msg):
+                delivered.append("macos")
+        elif ch == "slack":
+            webhook = cfg.get("slack_webhook", "")
+            if _notify_slack(webhook, msg):
+                delivered.append("slack")
+
+    # Guarantee the message is at least visible somewhere.
+    if not delivered:
+        print(msg)
+        delivered.append("stdout")
+
+    status["delivered"] = delivered
+    return status
 
 
 # ---------------------------------------------------------------------------
@@ -831,6 +1029,172 @@ def weekly_aggregate(cfg: dict, year: int, week: int, goals: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Manager report — outward-facing weekly impact digest (Phase 1)
+# ---------------------------------------------------------------------------
+#
+# weekly_aggregate is inward-facing (self-review counts). manager_report walks
+# the same week but keeps the actual completed-task text + goal linkage so it
+# can produce impact statements a manager reads: what shipped, tied to which
+# goal, and what cross-team / beyond-scope work happened. Draft only — the
+# command layer writes it to a note the user reviews and sends themselves.
+
+# High-impact threshold: goals at this impact or above lead the report.
+HIGH_IMPACT = 4
+
+
+def _report_line(task: dict, goal: "dict | None") -> dict:
+    """Shape one completed task into a report entry with goal context.
+
+    `impact` is the goal's impact SCORE (int, for ranking); `impact_note` is the
+    user's free-text impact statement captured at eod ("unblocked X"); those are
+    distinct and both carried.
+    """
+    return {
+        "text": task.get("text", "").strip(),
+        "goal_id": task.get("goal_id"),
+        "goal_title": goal.get("title", "") if goal else "",
+        "impact": goal.get("impact", 0) if goal else 0,
+        "off_plan": bool(task.get("off_plan")),
+        "with_teams": task.get("with_teams") or [],
+        "impact_note": (task.get("impact") or "").strip() or None,
+    }
+
+
+def manager_report(cfg: dict, year: int, week: int, goals: list) -> dict:
+    """Build an outward-facing weekly impact report from completed work.
+
+    Buckets completed tasks into:
+      - highest_impact: done tasks linked to a goal with impact >= HIGH_IMPACT,
+        sorted by impact desc.
+      - beyond_scope: off-plan done work, OR done work linked to a lower-impact
+        goal — the "expanded beyond my lane" story managers often miss.
+      - other: remaining completed work (linked, mid-impact, on-plan).
+    Also carries wins and a per-goal progress snapshot for context.
+
+    Returns the structured buckets plus a rendered markdown draft. Empty weeks
+    yield an empty-but-valid report (no crash, honest "nothing logged" markdown).
+    """
+    monday, sunday = week_range(year, week)
+    goal_by_id = {g["id"]: g for g in goals if g.get("id")}
+
+    highest, beyond, other = [], [], []
+    wins = []
+    seen_win = set()
+    done_total = 0
+
+    for d in _all_week_dates(year, week):
+        p = date_path(cfg, d)
+        if not p.exists():
+            continue
+        parsed = parse_daily(p)
+        for t in parsed["done"]:
+            done_total += 1
+            gid = t.get("goal_id")
+            goal = goal_by_id.get(gid) if gid else None
+            entry = _report_line(t, goal)
+            if entry["off_plan"]:
+                beyond.append(entry)
+            elif goal and goal.get("impact", 0) >= HIGH_IMPACT:
+                highest.append(entry)
+            elif goal:
+                # linked but below the high bar — still worth showing, but as
+                # steady progress rather than headline.
+                other.append(entry)
+            else:
+                # unlinked on-plan work — reactive/keep-the-lights-on; goes to
+                # "other" so it doesn't crowd out impact, but isn't dropped.
+                other.append(entry)
+        for w in parsed["wins"]:
+            txt = w.get("text", "").strip()
+            if txt and txt not in seen_win:
+                seen_win.add(txt)
+                gid = w.get("goal_id")
+                wins.append(_report_line(w, goal_by_id.get(gid) if gid else None))
+
+    highest.sort(key=lambda e: -e["impact"])
+
+    # Per-goal progress snapshot (reuse the aggregator's math for consistency).
+    agg = weekly_aggregate(cfg, year, week, goals)
+    per_goal = [g for g in agg["per_goal"] if (g["done"] + g["planned"] + g["missed"]) > 0]
+    goals_advanced = sum(1 for g in per_goal if g["done"] > 0)
+    cross_team = sum(1 for e in beyond if e["off_plan"])
+
+    markdown = _render_manager_report(
+        year, week, monday, sunday,
+        highest, beyond, other, wins,
+        done_total, goals_advanced, cross_team,
+    )
+
+    return {
+        "year": year,
+        "week": week,
+        "monday": monday.isoformat(),
+        "sunday": sunday.isoformat(),
+        "summary": {
+            "shipped": done_total,
+            "goals_advanced": goals_advanced,
+            "cross_team": cross_team,
+        },
+        "highest_impact": highest,
+        "beyond_scope": beyond,
+        "other": other,
+        "wins": wins,
+        "per_goal": per_goal,
+        "markdown": markdown,
+    }
+
+
+def _render_manager_report(year, week, monday, sunday, highest, beyond, other,
+                           wins, shipped, goals_advanced, cross_team) -> str:
+    """Render the report buckets into a paste-ready markdown draft."""
+    wk = f"{year}-W{week:02d}"
+    lines = [
+        f"# Weekly impact — {wk}",
+        f"_{monday.isoformat()} → {sunday.isoformat()}_",
+        "",
+        f"**{goals_advanced} goal(s) advanced · {shipped} shipped · {cross_team} cross-team / off-plan**",
+    ]
+
+    def bullet(e: dict, show_score: bool = False) -> str:
+        # Lead with the outcome: "<what shipped> — <impact note>". The impact
+        # note is the payload captured at eod; fall back to bare task text.
+        head = e["text"]
+        if e.get("impact_note"):
+            head = f"{head} — {e['impact_note']}"
+        teams = e.get("with_teams") or []
+        team_tag = f" _(with {', '.join(teams)})_" if teams else ""
+        if e["goal_title"]:
+            score = f" (impact {e['impact']})" if show_score else ""
+            goal = f" · _{e['goal_title']}_{score}"
+        else:
+            goal = ""
+        return f"- {head}{team_tag}{goal}"
+
+    if highest:
+        lines += ["", "## Highest impact"]
+        lines += [bullet(e, show_score=True) for e in highest]
+
+    if beyond:
+        lines += ["", "## Beyond my scope"]
+        lines += [bullet(e) for e in beyond]
+
+    if other:
+        lines += ["", "## Also shipped"]
+        lines += [bullet(e) for e in other]
+
+    if wins:
+        lines += ["", "## Wins"]
+        lines += [bullet(e) for e in wins]
+
+    if not (highest or beyond or other or wins):
+        lines += ["", "_No completed work logged this week._"]
+
+    lines += ["", "---",
+              "_Drafted by work-buddy from this week's daily notes. Review and edit before sending._"]
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Signal detection for proactive kickstart suggestion
 # ---------------------------------------------------------------------------
 
@@ -981,6 +1345,10 @@ def get_parser() -> argparse.ArgumentParser:
     wa.add_argument("--year", type=int)
     wa.add_argument("--week", type=int)
 
+    mr = sub.add_parser("manager-report")
+    mr.add_argument("--year", type=int)
+    mr.add_argument("--week", type=int)
+
     sub.add_parser("kickstart-signals")
 
     at = sub.add_parser("append-task")
@@ -988,9 +1356,22 @@ def get_parser() -> argparse.ArgumentParser:
     at.add_argument("--text", required=True)
     at.add_argument("--goal")
     at.add_argument("--off-plan", action="store_true")
+    at.add_argument("--with", dest="with_teams",
+                    help="Comma-separated cross-team tags, e.g. devops,geo-data")
 
     uw = sub.add_parser("unresolved-workdays")
     uw.add_argument("--max-days", type=int, default=7)
+
+    rs = sub.add_parser("reminder-status")
+    rs.add_argument("--max-days", type=int, default=7)
+
+    nt = sub.add_parser("notify")
+    nt.add_argument("--channel", default="stdout",
+                    choices=["stdout", "macos", "slack", "auto"],
+                    help="Where to deliver the reminder (default: stdout)")
+    nt.add_argument("--max-days", type=int, default=7)
+    nt.add_argument("--force", action="store_true",
+                    help="Emit even when nothing is outstanding (test the pipe)")
 
     return p
 
@@ -1101,6 +1482,17 @@ def main() -> None:
         result = weekly_aggregate(cfg, y, w, goals)
         print(json.dumps(result, ensure_ascii=False))
 
+    elif args.cmd == "manager-report":
+        cfg = load_cfg()
+        if args.year and args.week:
+            y, w = args.year, args.week
+        else:
+            y, w = iso_week_for(datetime.date.today())
+        goals_path = vault_work_dir(cfg) / "Goals" / "Quarterly.md"
+        goals = parse_goals(goals_path) if goals_path.exists() else []
+        result = manager_report(cfg, y, w, goals)
+        print(json.dumps(result, ensure_ascii=False))
+
     elif args.cmd == "kickstart-signals":
         cfg = load_cfg()
         print(json.dumps(kickstart_signals(cfg), ensure_ascii=False))
@@ -1108,13 +1500,27 @@ def main() -> None:
     elif args.cmd == "append-task":
         cfg = load_cfg()
         path = Path(args.path) if args.path else today_path(cfg)
-        result = append_task(cfg, path, args.text, args.goal, args.off_plan)
+        teams = [t.strip() for t in (args.with_teams or "").split(",") if t.strip()]
+        result = append_task(cfg, path, args.text, args.goal, args.off_plan, teams)
         print(json.dumps(result))
 
     elif args.cmd == "unresolved-workdays":
         cfg = load_cfg()
         result = unresolved_workdays(cfg, args.max_days)
         print(json.dumps(result, ensure_ascii=False))
+
+    elif args.cmd == "reminder-status":
+        cfg = load_cfg()
+        result = reminder_status(cfg, args.max_days)
+        print(json.dumps(result, ensure_ascii=False))
+
+    elif args.cmd == "notify":
+        cfg = load_cfg()
+        result = notify(cfg, args.channel, args.max_days, args.force)
+        # notify() may already have printed the message (stdout channel); the
+        # JSON goes to stderr so a cron log captures structured status without
+        # corrupting a stdout-piped notification.
+        print(json.dumps(result, ensure_ascii=False), file=sys.stderr)
 
     else:
         parser.print_help()

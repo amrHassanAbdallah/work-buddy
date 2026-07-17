@@ -36,6 +36,7 @@ Runs `install.sh` first (the helper script lives in the same canonical place eit
 | `/work-buddy now` | Get one task to work on right now (highest impact, unchecked) |
 | `/work-buddy eod` | End-of-day review: mark tasks done/missed, log wins and reflection |
 | `/work-buddy weekly` | Weekly review: aggregates, goal progress, blockers, reflection |
+| `/work-buddy report` | Draft a **manager-facing** weekly impact update — what shipped, ranked by goal impact, with cross-team/off-plan work surfaced. Saved to `Manager-Updates/`; you review and send |
 | `/work-buddy kickstart` | Tired or stuck? Picks a tiny, valuable first move, explains why it matters, grants permission to stop after it |
 | `/work-buddy add` | Quick mid-day task append, prompts for goal link |
 | `/work-buddy catchup` | Backfill workdays you missed `eod` on — captures both planned-but-unreviewed work and **off-plan work you actually did** |
@@ -44,12 +45,48 @@ Running `/work-buddy` with no argument auto-selects `morning` (if today has no p
 
 ## What gets tracked
 
-- **Tasks** linked to quarterly goals (impact-ranked), with an `[off-plan]` marker for work you did that wasn't on the plan.
+- **Tasks** linked to quarterly goals (impact-ranked), with an `[off-plan]` marker for work you did that wasn't on the plan, an optional `[with: team]` cross-team tag, and an `— impact: …` outcome note captured at end-of-day (what shipped / who it unblocked). These feed the manager report.
 - **Mood + energy** in each daily note's frontmatter (optional, low-friction).
 - **Kickstart usage** — counts how many times you needed a tiny-step nudge per day.
 - **Manager-discussion items** — auto-generated weekly from blockers, stalled goals, growth wins, workload signals, goal alignment, and **off-plan ratio** (≥40% of completed work being off-plan flags a clarity/reactivity convo).
 
-`/work-buddy morning` will detect unresolved past workdays and offer to catch up before planning today. `/work-buddy now` will gently suggest `/work-buddy kickstart` if recent signals look low (e.g. yesterday energy ≤2, 0 tasks done, or the same task carried 3+ days).
+Every command (`morning`, `now`, `add`, `kickstart`, and the no-arg path) runs an **unresolved-days pre-flight** — the moment you open the tool it checks whether you skipped `eod` on a recent workday and offers to catch up, so a forgotten day surfaces on its own instead of silently piling up. `/work-buddy now` will also gently suggest `/work-buddy kickstart` if recent signals look low (e.g. yesterday energy ≤2, 0 tasks done, or the same task carried 3+ days).
+
+## Manager visibility
+
+Logged work that never reaches your manager shows up as a rating gap. `/work-buddy report` turns the week's daily notes into a **manager-facing impact draft** — completed work reframed as impact statements, ranked by goal impact score, with cross-team and off-plan work pulled to the front (the "expanded beyond my lane" story that's easy to miss). It's the outward counterpart to `weekly`'s inward self-review.
+
+```bash
+/work-buddy report          # draft this week's impact update
+```
+
+The report is only as good as what you capture. At `eod`, each completed task gets two optional one-line prompts — **"what did this ship / who did it unblock?"** (stored as an `— impact:` note) and **"any other team involved?"** (a `[with: team]` tag). Both are skippable; both make the report read as outcomes, not task dumps.
+
+Drafts save to `Manager-Updates/YYYY-Wnn.md` in your vault. **Draft-only** — you review and send. Slack delivery is opt-in and gated: it only sends after showing you the exact text and getting a yes, and only when you've set a `slack_webhook`.
+
+## Reminders (scheduled push)
+
+The in-tool pre-flight only helps once you open the tool. For a nudge that reaches you even when you don't, install a scheduled reminder:
+
+```bash
+./install-reminders.sh                       # macOS notification, 17:30 Mon–Fri
+./install-reminders.sh --time 18:00 --days 1-5
+./install-reminders.sh --channel slack       # DM yourself via Slack webhook
+./install-reminders.sh --channel auto        # macOS banner + Slack
+./install-reminders.sh --uninstall
+```
+
+It schedules `wb.py notify`, which is **silent unless you actually have unresolved workdays** — a smart nudge, not a daily nag. On macOS it installs a launchd LaunchAgent; on Linux it prints a `crontab` line to add.
+
+**Slack delivery** needs an [incoming-webhook](https://api.slack.com/messaging/webhooks) URL added to `~/.claude/skills/work-buddy/config.json`:
+```json
+"slack_webhook": "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+```
+
+Test the pipe end-to-end (fires even when nothing is outstanding):
+```bash
+python3 ~/.claude/skills/work-buddy/helpers/wb.py notify --channel macos --force
+```
 
 **Workdays** default Mon–Fri. Override with `"workdays": [1,2,3,4,5,6]` (ISO weekday: 1=Mon..7=Sun) in `~/.claude/skills/work-buddy/config.json`. Catchup respects this so non-workdays never get flagged.
 
@@ -57,9 +94,10 @@ Running `/work-buddy` with no argument auto-selects `morning` (if today has no p
 
 ```
 <vault>/work-buddy/
-├── Goals/Quarterly.md   ← source of truth for goals
-├── Daily/YYYY-MM-DD.md  ← one file per day
-└── Weekly/YYYY-Wnn.md   ← one file per week
+├── Goals/Quarterly.md         ← source of truth for goals
+├── Daily/YYYY-MM-DD.md        ← one file per day
+├── Weekly/YYYY-Wnn.md         ← one file per week
+└── Manager-Updates/YYYY-Wnn.md ← manager-facing impact drafts (from /work-buddy report)
 ```
 
 ## Requirements
@@ -70,10 +108,10 @@ Running `/work-buddy` with no argument auto-selects `morning` (if today has no p
 ## Tests
 
 ```bash
-python3 -m unittest tests.test_wb -v
+python3 -m unittest discover -s tests -v
 ```
 
-23 tests covering parse/write round-trip, custom-section preservation, goal filtering, kickstart-signal gating, weekly aggregator thresholds, and CLI `--from-file` integration. No external deps — stdlib `unittest`.
+Tests cover parse/write round-trip (including `[with:]` / `— impact:` fields), custom-section preservation, goal filtering, uppercase/off-plan task parsing, kickstart-signal gating, weekly aggregator thresholds, manager-report bucketing, reminder/notify delivery, and CLI `--from-file` integration. No external deps — stdlib `unittest`.
 
 ## Codex / non-Claude-Code clients
 

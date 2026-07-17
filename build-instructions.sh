@@ -22,7 +22,7 @@ OUT="$REPO/INSTRUCTIONS.md"
   # Strip frontmatter from SKILL.md
   awk 'BEGIN{fm=0} /^---$/{fm++; next} fm<2{next} {print}' "$REPO/SKILL.md"
   echo
-  for cmd in init goals morning now eod kickstart add catchup weekly; do
+  for cmd in init goals morning now eod kickstart add catchup weekly report; do
     echo
     echo "---"
     echo

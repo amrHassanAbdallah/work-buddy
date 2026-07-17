@@ -32,11 +32,19 @@ Ask only if relevant (the user said something like "I just did this" rather than
 
 If "already done off-plan": pass `--off-plan` and the helper will mark it. (Note: in v1, `append-task` only adds to `planned`. For "already done off-plan" items, prefer logging via `eod` or `catchup`, where they go directly into `done`.)
 
+## Step 3.5 — Cross-team? (optional)
+
+If the task obviously depends on or involves another team, capture it — this seeds the manager report's cross-team surfacing:
+
+> "Another team involved? (e.g. devops, geo-data — Enter to skip)"
+
+Pass named teams via `--with` (comma-separated). Skip freely.
+
 ## Step 4 — Append
 
 ```bash
 python3 ~/.claude/skills/work-buddy/helpers/wb.py --config ~/.claude/skills/work-buddy/config.json \
-  append-task --text "<task text>" --goal "<goal_id or omit>"
+  append-task --text "<task text>" --goal "<goal_id or omit>" --with "<team1,team2 or omit>"
 ```
 
 Returns `{"status": "ok", "path": "...", "created": bool, "planned_count": N}`.

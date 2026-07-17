@@ -1,7 +1,7 @@
 """Tests for helpers/wb.py — stdlib unittest, no external deps.
 
 Run from repo root:
-    python3 -m unittest tests.test_wb -v
+    python3 -m unittest discover -s tests -v
 """
 
 import datetime
@@ -100,17 +100,59 @@ class TestParseTask(unittest.TestCase):
         self.assertEqual(t["goal_id"], "perf-q2")
 
     def test_off_plan_marker_after_goal(self):
+        # The off-plan marker is stripped before goal matching, so the goal link
+        # survives regardless of marker order and the goal text is not left behind.
         t = wb.parse_task("- [x] Helped Sara debug → perf-q2 [off-plan]")
-        self.assertEqual(t["off_plan"], True)
-        # goal_id only matches when arrow is at end-of-line; here [off-plan] is after,
-        # so goal_id parsing may or may not catch it. Either way, off_plan must be True.
-        self.assertEqual(t["text"].rstrip(), "Helped Sara debug" if t["goal_id"] else "Helped Sara debug → perf-q2")
+        self.assertTrue(t["off_plan"])
+        self.assertEqual(t["goal_id"], "perf-q2")
+        self.assertEqual(t["text"], "Helped Sara debug")
 
     def test_off_plan_no_goal(self):
         t = wb.parse_task("- [x] Unplanned chore [off-plan]")
         self.assertTrue(t["off_plan"])
         self.assertIsNone(t["goal_id"])
         self.assertEqual(t["text"], "Unplanned chore")
+
+    def test_uppercase_checkbox_is_checked(self):
+        t = wb.parse_task("- [X] Done via Obsidian → perf-q2")
+        self.assertIsNotNone(t)
+        self.assertTrue(t["checked"])
+        self.assertEqual(t["text"], "Done via Obsidian")
+        self.assertEqual(t["goal_id"], "perf-q2")
+
+    def test_impact_note_and_with_team(self):
+        t = wb.parse_task(
+            "- [x] Shipped API [with: devops] → av-flow — impact: unblocked Marketplace")
+        self.assertEqual(t["text"], "Shipped API")
+        self.assertEqual(t["goal_id"], "av-flow")
+        self.assertEqual(t["with_teams"], ["devops"])
+        self.assertEqual(t["impact"], "unblocked Marketplace")
+        self.assertFalse(t["off_plan"])
+
+    def test_multiple_teams_and_off_plan_with_impact(self):
+        t = wb.parse_task(
+            "- [x] Ran launch [with: geo-data, geo-way] [off-plan] — impact: end to end")
+        self.assertEqual(t["with_teams"], ["geo-data", "geo-way"])
+        self.assertTrue(t["off_plan"])
+        self.assertEqual(t["impact"], "end to end")
+        self.assertEqual(t["text"], "Ran launch")
+
+    def test_impact_note_with_apostrophe_survives(self):
+        t = wb.parse_task("- [x] Fix → perf-q2 — impact: unblocked Sara's PR")
+        self.assertEqual(t["impact"], "unblocked Sara's PR")
+        self.assertEqual(t["goal_id"], "perf-q2")
+
+    def test_new_fields_round_trip(self):
+        line = "- [x] Shipped API [with: devops] → av-flow — impact: unblocked Marketplace"
+        t1 = wb.parse_task(line)
+        t2 = wb.parse_task(wb._tasks_to_md([t1]))
+        for f in ("text", "checked", "goal_id", "off_plan", "with_teams", "impact"):
+            self.assertEqual(t1[f], t2[f], f"field {f} did not round-trip")
+
+    def test_bare_task_has_empty_new_fields(self):
+        t = wb.parse_task("- [ ] Plain")
+        self.assertEqual(t["with_teams"], [])
+        self.assertIsNone(t["impact"])
 
 
 class TestParseGoals(unittest.TestCase):
@@ -433,6 +475,120 @@ class TestWeeklyAggregate(unittest.TestCase):
 
 
 # -----------------------------------------------------------------------------
+# Manager report — outward-facing weekly impact digest
+# -----------------------------------------------------------------------------
+
+class TestManagerReport(unittest.TestCase):
+    def _goals(self, work):
+        (work / "Goals" / "Quarterly.md").write_text("""# Q
+
+## G1: AV flow
+- id: av-flow
+- impact: 5
+- type: delivery
+
+## G2: Bookmark manager
+- id: bookmark-mgr
+- impact: 4
+- type: delivery
+
+## G3: Docs cleanup
+- id: docs
+- impact: 2
+- type: delivery
+""")
+        return wb.parse_goals(work / "Goals" / "Quarterly.md")
+
+    def test_buckets_by_impact_and_off_plan(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        # Fully-past week 17 (Apr 20-26) so all days are counted.
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow"])
+        write_day(work, mon + datetime.timedelta(days=1), energy_eod=4, reflection="x",
+                  done=["- [x] Shipped bookmark support → bookmark-mgr",
+                        "- [x] Owned DH ETA launch [off-plan]"])
+        write_day(work, mon + datetime.timedelta(days=2), energy_eod=4, reflection="x",
+                  done=["- [x] Fixed README typo → docs",
+                        "- [x] Unlinked chore"])
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+
+        self.assertEqual(rep["summary"]["shipped"], 5)
+        self.assertEqual(rep["summary"]["goals_advanced"], 3)
+        self.assertEqual(rep["summary"]["cross_team"], 1)
+
+        highest = [e["text"] for e in rep["highest_impact"]]
+        self.assertEqual(highest, ["Finalized AV flow", "Shipped bookmark support"])
+        # sorted by impact desc: av-flow (5) before bookmark-mgr (4)
+        self.assertEqual(rep["highest_impact"][0]["impact"], 5)
+
+        beyond = [e["text"] for e in rep["beyond_scope"]]
+        self.assertEqual(beyond, ["Owned DH ETA launch"])
+
+        other = [e["text"] for e in rep["other"]]
+        self.assertIn("Fixed README typo", other)   # linked but impact 2
+        self.assertIn("Unlinked chore", other)       # no goal link
+
+    def test_markdown_has_sections(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow",
+                        "- [x] Owned DH ETA launch [off-plan]"])
+        md = wb.manager_report(cfg, 2026, 17, goals)["markdown"]
+        self.assertIn("# Weekly impact — 2026-W17", md)
+        self.assertIn("## Highest impact", md)
+        self.assertIn("## Beyond my scope", md)
+        self.assertIn("(impact 5)", md)
+        self.assertIn("Review and edit before sending", md)
+
+    def test_empty_week_is_valid(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+        self.assertEqual(rep["summary"]["shipped"], 0)
+        self.assertIn("No completed work logged", rep["markdown"])
+        self.assertEqual(rep["highest_impact"], [])
+
+    def test_impact_note_leads_bullet(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow — impact: unblocked Marketplace"])
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+        self.assertEqual(rep["highest_impact"][0]["impact_note"], "unblocked Marketplace")
+        # The outcome note must appear in the rendered bullet.
+        self.assertIn("Finalized AV flow — unblocked Marketplace", rep["markdown"])
+
+    def test_cross_team_tag_surfaces(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Launch [with: geo-data] [off-plan] — impact: shipped it"])
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+        self.assertEqual(rep["beyond_scope"][0]["with_teams"], ["geo-data"])
+        self.assertIn("(with geo-data)", rep["markdown"])
+
+    def test_cli_manager_report(self):
+        cfg, cfg_path, work = make_vault()
+        self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "manager-report", "--year", "2026", "--week", "17"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["summary"]["shipped"], 1)
+        self.assertIn("Highest impact", data["markdown"])
+
+
+# -----------------------------------------------------------------------------
 # CLI integration — including --from-file
 # -----------------------------------------------------------------------------
 
@@ -521,6 +677,15 @@ class TestAppendTask(unittest.TestCase):
         parsed = wb.parse_daily(target)
         self.assertTrue(parsed["planned"][0]["off_plan"])
 
+    def test_with_teams(self):
+        cfg, _, work = make_vault()
+        target = work / "Daily" / "2026-04-29.md"
+        wb.append_task(cfg, target, "Cross-team task", "av-flow",
+                       with_teams=["devops", "sre"])
+        parsed = wb.parse_daily(target)
+        self.assertEqual(parsed["planned"][0]["with_teams"], ["devops", "sre"])
+        self.assertEqual(parsed["planned"][0]["goal_id"], "av-flow")
+
 
 class TestWorkdays(unittest.TestCase):
     def test_default_mon_fri(self):
@@ -575,6 +740,84 @@ class TestUnresolvedWorkdays(unittest.TestCase):
         for r in result:
             d = datetime.date.fromisoformat(r["date"])
             self.assertEqual(d.isoweekday(), 1)
+
+    def test_empty_vault_flags_nothing(self):
+        # No notes at all → adoption floor is None → nothing flagged (a brand-new
+        # user shouldn't be told they "forgot" days they were never using the tool for).
+        cfg, _, work = make_vault()
+        self.assertEqual(wb.unresolved_workdays(cfg, max_days=7), [])
+
+    def test_adoption_floor_excludes_pre_first_note_days(self):
+        # First note is a recent workday that's fully resolved. Days BEFORE it must
+        # not appear as "no note", even though those files are missing.
+        cfg, _, work = make_vault()
+        first = self._recent_resolved_workday(work)
+        result = wb.unresolved_workdays(cfg, max_days=7)
+        for r in result:
+            self.assertGreaterEqual(datetime.date.fromisoformat(r["date"]), first)
+
+    def _recent_resolved_workday(self, work):
+        d = datetime.date.today() - datetime.timedelta(days=1)
+        while d.isoweekday() > 5:
+            d -= datetime.timedelta(days=1)
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        return d
+
+
+class TestReminder(unittest.TestCase):
+    def _recent_workday(self):
+        d = datetime.date.today() - datetime.timedelta(days=1)
+        while d.isoweekday() > 5:
+            d -= datetime.timedelta(days=1)
+        return d
+
+    def test_status_flags_unresolved(self):
+        cfg, _, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, planned=["- [ ] Stuck → perf-q2"])  # no eod
+        status = wb.reminder_status(cfg, max_days=1)
+        self.assertTrue(status["needs_reminder"])
+        self.assertIn("Run /work-buddy catchup", status["message"])
+        self.assertTrue(any(u["date"] == d.isoformat() for u in status["unresolved"]))
+
+    def test_status_clean_when_caught_up(self):
+        cfg, _, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        status = wb.reminder_status(cfg, max_days=1)
+        self.assertFalse(status["needs_reminder"])
+        self.assertEqual(status["message"], "")
+
+    def test_notify_stdout_delivers_when_unresolved(self):
+        cfg, cfg_path, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, planned=["- [ ] Stuck"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "notify", "--channel", "stdout", "--max-days", "1"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("catchup", r.stdout)  # human message on stdout
+        self.assertIn("\"delivered\"", r.stderr)  # structured status on stderr
+
+    def test_notify_silent_when_caught_up(self):
+        cfg, cfg_path, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "notify", "--channel", "stdout", "--max-days", "1"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "")  # nothing surfaced to the user
+
+    def test_notify_force_emits_when_nothing_outstanding(self):
+        cfg, cfg_path, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "notify", "--channel", "stdout", "--max-days", "1", "--force"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotEqual(r.stdout.strip(), "")  # force surfaces something
 
 
 if __name__ == "__main__":
