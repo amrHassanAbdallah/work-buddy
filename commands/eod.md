@@ -46,6 +46,22 @@ If the user says "done" for a task, also ask:
 > "Was this a notable win? (y/n)"
 If yes, add it to `wins` as well.
 
+### Impact capture (done tasks only)
+
+This is what makes the weekly **manager report** strong. For each task marked **done** — especially goal-linked ones — ask one optional, low-friction question while it's fresh:
+
+> "One line — what did this ship or who did it unblock? (Enter to skip)"
+
+If the user answers, set the task's `impact` field to that text (a free-text outcome statement, e.g. "unblocked Marketplace's integration"). If they skip, leave `impact` null — never fabricate impact.
+
+Then, if the work involved another team, capture it:
+
+> "Any other team involved? (e.g. devops, geo-data — Enter to skip)"
+
+Set the task's `with_teams` field to a list of the named teams (lowercase, hyphenated). This surfaces cross-team work in the report and seeds dependency tracking.
+
+Keep both prompts genuinely optional — a fast "Enter, Enter" must stay frictionless. Don't nag; ask once per done task.
+
 ## Step 4 — Reflection
 
 Ask:
@@ -88,6 +104,8 @@ Build the updated JSON, preserving frontmatter fields AND any custom sections:
 ```
 
 Note: `planned` should contain only unchecked (unresolved) tasks after processing. Completed tasks move out of `planned` into `done`/`missed`.
+
+Each task object carries: `text`, `checked`, `goal_id`, `off_plan`, `with_teams` (list, e.g. `["devops"]`), `impact` (free-text outcome or null), `raw`. Preserve `with_teams`/`impact` you didn't change; set them from the impact-capture step above. `write-daily` re-emits them inline as `[with: ...]` and `— impact: ...` so they round-trip.
 
 Write the JSON to a temp file with a single-quoted heredoc, then call `write-daily --from-file` (avoids any shell-escape issues with apostrophes / quotes in task text):
 

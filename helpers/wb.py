@@ -135,6 +135,11 @@ def week_range(iso_year: int, iso_week: int) -> tuple:
 TASK_RE = re.compile(r"^- \[( |x|X)\] (.+)$")
 GOAL_ID_RE = re.compile(r"→\s*([a-z0-9-]+)\s*$")
 OFF_PLAN_RE = re.compile(r"\[off-plan\]")
+WITH_RE = re.compile(r"\[with:\s*([a-z0-9][a-z0-9 ,-]*?)\s*\]")
+# Impact is a free-text trailing clause, introduced by " — impact: ".
+# Captured greedily to end-of-line, so it must be stripped before the goal
+# marker (which is also end-anchored).
+IMPACT_RE = re.compile(r"\s*[—-]\s*impact:\s*(.+?)\s*$")
 
 
 def parse_task(line: str) -> "dict | None":
@@ -143,19 +148,37 @@ def parse_task(line: str) -> "dict | None":
         return None
     checked = m.group(1) in ("x", "X")
     text_raw = m.group(2)
+
     off_plan = bool(OFF_PLAN_RE.search(text_raw))
-    # Strip the off-plan marker first so the goal marker still resolves when it
-    # was written as "→ goal [off-plan]" (GOAL_ID_RE is anchored to end-of-line).
-    text = OFF_PLAN_RE.sub("", text_raw)
+
+    # Cross-team tag: [with: devops] / [with: geo-data]. May list multiple
+    # comma-separated teams. Stored as a normalized list.
+    with_teams = []
+    wm = WITH_RE.search(text_raw)
+    if wm:
+        with_teams = [t.strip() for t in wm.group(1).split(",") if t.strip()]
+
+    # Strip markers in an order that keeps each subsequent regex valid.
+    # 1. impact clause (outermost trailing), 2. off-plan, 3. with-tag,
+    # 4. goal marker (now safely at end-of-line).
+    text = text_raw
+    im = IMPACT_RE.search(text)
+    impact = im.group(1).strip() if im else None
+    text = IMPACT_RE.sub("", text)
+    text = OFF_PLAN_RE.sub("", text)
+    text = WITH_RE.sub("", text)
     goal_m = GOAL_ID_RE.search(text)
     goal_id = goal_m.group(1) if goal_m else None
     text = GOAL_ID_RE.sub("", text)
-    text = text.rstrip(" →").rstrip()
+    # Collapse any double spaces left by mid-line marker removal.
+    text = re.sub(r"\s{2,}", " ", text).rstrip(" →").strip()
     return {
         "text": text,
         "checked": checked,
         "goal_id": goal_id,
         "off_plan": off_plan,
+        "with_teams": with_teams,
+        "impact": impact,
         "raw": line.rstrip(),
     }
 
@@ -385,15 +408,23 @@ def render_weekly(iso_year: int, iso_week: int, ctx: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _tasks_to_md(tasks: list) -> str:
-    """Always rebuild from fields so checked-state and goal-id changes round-trip."""
+    """Always rebuild from fields so state changes round-trip.
+
+    Marker order matches parse_task's strip order so a written line re-parses
+    identically: text [with:...] [off-plan] → goal — impact: ...
+    """
     lines = []
     for t in tasks:
         box = "x" if t.get("checked") else " "
         text = t.get("text", "").rstrip()
+        teams = t.get("with_teams") or []
+        with_suffix = f" [with: {', '.join(teams)}]" if teams else ""
         op = " [off-plan]" if t.get("off_plan") else ""
         goal_id = t.get("goal_id")
         goal_suffix = f" → {goal_id}" if goal_id else ""
-        lines.append(f"- [{box}] {text}{op}{goal_suffix}")
+        impact = (t.get("impact") or "").strip()
+        impact_suffix = f" — impact: {impact}" if impact else ""
+        lines.append(f"- [{box}] {text}{with_suffix}{op}{goal_suffix}{impact_suffix}")
     return "\n".join(lines)
 
 
@@ -507,7 +538,7 @@ def write_goals(data: dict, path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def append_task(cfg: dict, path: Path, text: str, goal_id: "str | None" = None,
-                off_plan: bool = False) -> dict:
+                off_plan: bool = False, with_teams: "list | None" = None) -> dict:
     """Append a task to a daily note's Planned section. Creates the note from
     template if missing. Returns the parsed-then-rewritten doc summary."""
     created = False
@@ -525,6 +556,8 @@ def append_task(cfg: dict, path: Path, text: str, goal_id: "str | None" = None,
         "checked": False,
         "goal_id": goal_id if goal_id else None,
         "off_plan": bool(off_plan),
+        "with_teams": with_teams or [],
+        "impact": None,
         "raw": "",
     }
     parsed["planned"].append(new_task)
@@ -1010,13 +1043,20 @@ HIGH_IMPACT = 4
 
 
 def _report_line(task: dict, goal: "dict | None") -> dict:
-    """Shape one completed task into a report entry with goal context."""
+    """Shape one completed task into a report entry with goal context.
+
+    `impact` is the goal's impact SCORE (int, for ranking); `impact_note` is the
+    user's free-text impact statement captured at eod ("unblocked X"); those are
+    distinct and both carried.
+    """
     return {
         "text": task.get("text", "").strip(),
         "goal_id": task.get("goal_id"),
         "goal_title": goal.get("title", "") if goal else "",
         "impact": goal.get("impact", 0) if goal else 0,
         "off_plan": bool(task.get("off_plan")),
+        "with_teams": task.get("with_teams") or [],
+        "impact_note": (task.get("impact") or "").strip() or None,
     }
 
 
@@ -1115,19 +1155,28 @@ def _render_manager_report(year, week, monday, sunday, highest, beyond, other,
         f"**{goals_advanced} goal(s) advanced · {shipped} shipped · {cross_team} cross-team / off-plan**",
     ]
 
-    def bullet(e: dict) -> str:
-        goal = f" — _{e['goal_title']}_ (impact {e['impact']})" if e["goal_title"] else ""
-        return f"- {e['text']}{goal}"
+    def bullet(e: dict, show_score: bool = False) -> str:
+        # Lead with the outcome: "<what shipped> — <impact note>". The impact
+        # note is the payload captured at eod; fall back to bare task text.
+        head = e["text"]
+        if e.get("impact_note"):
+            head = f"{head} — {e['impact_note']}"
+        teams = e.get("with_teams") or []
+        team_tag = f" _(with {', '.join(teams)})_" if teams else ""
+        if e["goal_title"]:
+            score = f" (impact {e['impact']})" if show_score else ""
+            goal = f" · _{e['goal_title']}_{score}"
+        else:
+            goal = ""
+        return f"- {head}{team_tag}{goal}"
 
     if highest:
         lines += ["", "## Highest impact"]
-        lines += [bullet(e) for e in highest]
+        lines += [bullet(e, show_score=True) for e in highest]
 
     if beyond:
         lines += ["", "## Beyond my scope"]
-        for e in beyond:
-            goal = f" — _{e['goal_title']}_" if e["goal_title"] else ""
-            lines.append(f"- {e['text']}{goal}")
+        lines += [bullet(e) for e in beyond]
 
     if other:
         lines += ["", "## Also shipped"]
@@ -1135,9 +1184,7 @@ def _render_manager_report(year, week, monday, sunday, highest, beyond, other,
 
     if wins:
         lines += ["", "## Wins"]
-        for e in wins:
-            goal = f" — _{e['goal_title']}_" if e["goal_title"] else ""
-            lines.append(f"- {e['text']}{goal}")
+        lines += [bullet(e) for e in wins]
 
     if not (highest or beyond or other or wins):
         lines += ["", "_No completed work logged this week._"]
@@ -1309,6 +1356,8 @@ def get_parser() -> argparse.ArgumentParser:
     at.add_argument("--text", required=True)
     at.add_argument("--goal")
     at.add_argument("--off-plan", action="store_true")
+    at.add_argument("--with", dest="with_teams",
+                    help="Comma-separated cross-team tags, e.g. devops,geo-data")
 
     uw = sub.add_parser("unresolved-workdays")
     uw.add_argument("--max-days", type=int, default=7)
@@ -1451,7 +1500,8 @@ def main() -> None:
     elif args.cmd == "append-task":
         cfg = load_cfg()
         path = Path(args.path) if args.path else today_path(cfg)
-        result = append_task(cfg, path, args.text, args.goal, args.off_plan)
+        teams = [t.strip() for t in (args.with_teams or "").split(",") if t.strip()]
+        result = append_task(cfg, path, args.text, args.goal, args.off_plan, teams)
         print(json.dumps(result))
 
     elif args.cmd == "unresolved-workdays":

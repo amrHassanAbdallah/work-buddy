@@ -120,6 +120,40 @@ class TestParseTask(unittest.TestCase):
         self.assertEqual(t["text"], "Done via Obsidian")
         self.assertEqual(t["goal_id"], "perf-q2")
 
+    def test_impact_note_and_with_team(self):
+        t = wb.parse_task(
+            "- [x] Shipped API [with: devops] → av-flow — impact: unblocked Marketplace")
+        self.assertEqual(t["text"], "Shipped API")
+        self.assertEqual(t["goal_id"], "av-flow")
+        self.assertEqual(t["with_teams"], ["devops"])
+        self.assertEqual(t["impact"], "unblocked Marketplace")
+        self.assertFalse(t["off_plan"])
+
+    def test_multiple_teams_and_off_plan_with_impact(self):
+        t = wb.parse_task(
+            "- [x] Ran launch [with: geo-data, geo-way] [off-plan] — impact: end to end")
+        self.assertEqual(t["with_teams"], ["geo-data", "geo-way"])
+        self.assertTrue(t["off_plan"])
+        self.assertEqual(t["impact"], "end to end")
+        self.assertEqual(t["text"], "Ran launch")
+
+    def test_impact_note_with_apostrophe_survives(self):
+        t = wb.parse_task("- [x] Fix → perf-q2 — impact: unblocked Sara's PR")
+        self.assertEqual(t["impact"], "unblocked Sara's PR")
+        self.assertEqual(t["goal_id"], "perf-q2")
+
+    def test_new_fields_round_trip(self):
+        line = "- [x] Shipped API [with: devops] → av-flow — impact: unblocked Marketplace"
+        t1 = wb.parse_task(line)
+        t2 = wb.parse_task(wb._tasks_to_md([t1]))
+        for f in ("text", "checked", "goal_id", "off_plan", "with_teams", "impact"):
+            self.assertEqual(t1[f], t2[f], f"field {f} did not round-trip")
+
+    def test_bare_task_has_empty_new_fields(self):
+        t = wb.parse_task("- [ ] Plain")
+        self.assertEqual(t["with_teams"], [])
+        self.assertIsNone(t["impact"])
+
 
 class TestParseGoals(unittest.TestCase):
     def test_template_returns_empty(self):
@@ -518,6 +552,27 @@ class TestManagerReport(unittest.TestCase):
         self.assertIn("No completed work logged", rep["markdown"])
         self.assertEqual(rep["highest_impact"], [])
 
+    def test_impact_note_leads_bullet(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Finalized AV flow → av-flow — impact: unblocked Marketplace"])
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+        self.assertEqual(rep["highest_impact"][0]["impact_note"], "unblocked Marketplace")
+        # The outcome note must appear in the rendered bullet.
+        self.assertIn("Finalized AV flow — unblocked Marketplace", rep["markdown"])
+
+    def test_cross_team_tag_surfaces(self):
+        cfg, _, work = make_vault()
+        goals = self._goals(work)
+        mon = datetime.date(2026, 4, 20)
+        write_day(work, mon, energy_eod=4, reflection="x",
+                  done=["- [x] Launch [with: geo-data] [off-plan] — impact: shipped it"])
+        rep = wb.manager_report(cfg, 2026, 17, goals)
+        self.assertEqual(rep["beyond_scope"][0]["with_teams"], ["geo-data"])
+        self.assertIn("(with geo-data)", rep["markdown"])
+
     def test_cli_manager_report(self):
         cfg, cfg_path, work = make_vault()
         self._goals(work)
@@ -621,6 +676,15 @@ class TestAppendTask(unittest.TestCase):
         wb.append_task(cfg, target, "Random", None, off_plan=True)
         parsed = wb.parse_daily(target)
         self.assertTrue(parsed["planned"][0]["off_plan"])
+
+    def test_with_teams(self):
+        cfg, _, work = make_vault()
+        target = work / "Daily" / "2026-04-29.md"
+        wb.append_task(cfg, target, "Cross-team task", "av-flow",
+                       with_teams=["devops", "sre"])
+        parsed = wb.parse_daily(target)
+        self.assertEqual(parsed["planned"][0]["with_teams"], ["devops", "sre"])
+        self.assertEqual(parsed["planned"][0]["goal_id"], "av-flow")
 
 
 class TestWorkdays(unittest.TestCase):

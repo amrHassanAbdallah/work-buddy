@@ -45,7 +45,7 @@ Running `/work-buddy` with no argument auto-selects `morning` (if today has no p
 
 ## What gets tracked
 
-- **Tasks** linked to quarterly goals (impact-ranked), with an `[off-plan]` marker for work you did that wasn't on the plan.
+- **Tasks** linked to quarterly goals (impact-ranked), with an `[off-plan]` marker for work you did that wasn't on the plan, an optional `[with: team]` cross-team tag, and an `— impact: …` outcome note captured at end-of-day (what shipped / who it unblocked). These feed the manager report.
 - **Mood + energy** in each daily note's frontmatter (optional, low-friction).
 - **Kickstart usage** — counts how many times you needed a tiny-step nudge per day.
 - **Manager-discussion items** — auto-generated weekly from blockers, stalled goals, growth wins, workload signals, goal alignment, and **off-plan ratio** (≥40% of completed work being off-plan flags a clarity/reactivity convo).
@@ -59,6 +59,8 @@ Logged work that never reaches your manager shows up as a rating gap. `/work-bud
 ```bash
 /work-buddy report          # draft this week's impact update
 ```
+
+The report is only as good as what you capture. At `eod`, each completed task gets two optional one-line prompts — **"what did this ship / who did it unblock?"** (stored as an `— impact:` note) and **"any other team involved?"** (a `[with: team]` tag). Both are skippable; both make the report read as outcomes, not task dumps.
 
 Drafts save to `Manager-Updates/YYYY-Wnn.md` in your vault. **Draft-only** — you review and send. Slack delivery is opt-in and gated: it only sends after showing you the exact text and getting a yes, and only when you've set a `slack_webhook`.
 
@@ -109,7 +111,7 @@ python3 ~/.claude/skills/work-buddy/helpers/wb.py notify --channel macos --force
 python3 -m unittest discover -s tests -v
 ```
 
-Tests cover parse/write round-trip, custom-section preservation, goal filtering, uppercase/off-plan task parsing, kickstart-signal gating, weekly aggregator thresholds, reminder/notify delivery, and CLI `--from-file` integration. No external deps — stdlib `unittest`.
+Tests cover parse/write round-trip (including `[with:]` / `— impact:` fields), custom-section preservation, goal filtering, uppercase/off-plan task parsing, kickstart-signal gating, weekly aggregator thresholds, manager-report bucketing, reminder/notify delivery, and CLI `--from-file` integration. No external deps — stdlib `unittest`.
 
 ## Codex / non-Claude-Code clients
 
