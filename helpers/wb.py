@@ -593,6 +593,146 @@ def unresolved_workdays(cfg: dict, max_days: int = 7) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Reminders / notifications
+# ---------------------------------------------------------------------------
+
+def _eod_logged_today(cfg: dict) -> bool:
+    """True if today's note exists and shows eod evidence (already closed out)."""
+    p = today_path(cfg)
+    if not p.exists():
+        return False
+    return _has_eod_evidence(parse_daily(p))
+
+
+def reminder_status(cfg: dict, max_days: int = 7) -> dict:
+    """Compute what, if anything, is worth reminding the user about.
+
+    Returns:
+      {
+        "needs_reminder": bool,
+        "unresolved": [ ...unresolved_workdays entries... ],
+        "today_eod_done": bool,
+        "title": str,
+        "message": str,   # short, human, notification-ready ("" if nothing)
+      }
+    A reminder is warranted when there are unresolved past workdays. Today's
+    own eod is reported but does not by itself trigger a reminder — the schedule
+    (e.g. a 17:30 job) decides whether "close out today" is relevant.
+    """
+    unresolved = unresolved_workdays(cfg, max_days)
+    today_done = _eod_logged_today(cfg)
+
+    if not unresolved:
+        return {
+            "needs_reminder": False,
+            "unresolved": [],
+            "today_eod_done": today_done,
+            "title": "work-buddy",
+            "message": "",
+        }
+
+    # Build a compact human summary of the outstanding days.
+    parts = []
+    for u in unresolved:
+        if not u["has_note"]:
+            parts.append(f"{u['weekday']} (no note)")
+        elif u["planned_unresolved"]:
+            parts.append(f"{u['weekday']} ({u['planned_unresolved']} open)")
+        else:
+            parts.append(u["weekday"])
+    n = len(unresolved)
+    day_word = "day" if n == 1 else "days"
+    message = f"{n} unresolved work{day_word}: " + ", ".join(parts) + ". Run /work-buddy catchup."
+    return {
+        "needs_reminder": True,
+        "unresolved": unresolved,
+        "today_eod_done": today_done,
+        "title": "work-buddy",
+        "message": message,
+    }
+
+
+def _notify_macos(title: str, message: str) -> bool:
+    """Fire a macOS notification banner via osascript. Best-effort."""
+    if not shutil.which("osascript"):
+        return False
+    # Escape double quotes for the AppleScript string literals.
+    safe_msg = message.replace('"', '\\"')
+    safe_title = title.replace('"', '\\"')
+    script = f'display notification "{safe_msg}" with title "{safe_title}"'
+    try:
+        import subprocess
+        subprocess.run(["osascript", "-e", script], check=False,
+                       capture_output=True, timeout=10)
+        return True
+    except Exception:
+        return False
+
+
+def _notify_slack(webhook_url: str, message: str) -> bool:
+    """Post a message to a Slack incoming-webhook URL. Stdlib-only (urllib)."""
+    if not webhook_url:
+        return False
+    import urllib.request
+    import urllib.error
+    payload = json.dumps({"text": message}).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def notify(cfg: dict, channel: str, max_days: int = 7, force: bool = False) -> dict:
+    """Run the reminder check and deliver via `channel`.
+
+    channel: "stdout" | "macos" | "slack" | "auto"
+      - "auto" delivers via macOS if available AND a slack_webhook is configured
+        it also posts to Slack. Falls back to stdout.
+    Set force=True to emit even when there's nothing outstanding (useful for
+    testing the pipe end-to-end).
+    Returns the reminder_status dict augmented with {"delivered": [channels]}.
+    """
+    status = reminder_status(cfg, max_days)
+    delivered: list = []
+
+    if not status["needs_reminder"] and not force:
+        status["delivered"] = delivered
+        return status
+
+    msg = status["message"] or "work-buddy: reminder check (nothing outstanding)."
+    title = status["title"]
+
+    channels = [channel]
+    if channel == "auto":
+        channels = ["macos", "slack"]
+
+    for ch in channels:
+        if ch == "stdout":
+            print(msg)
+            delivered.append("stdout")
+        elif ch == "macos":
+            if _notify_macos(title, msg):
+                delivered.append("macos")
+        elif ch == "slack":
+            webhook = cfg.get("slack_webhook", "")
+            if _notify_slack(webhook, msg):
+                delivered.append("slack")
+
+    # Guarantee the message is at least visible somewhere.
+    if not delivered:
+        print(msg)
+        delivered.append("stdout")
+
+    status["delivered"] = delivered
+    return status
+
+
+# ---------------------------------------------------------------------------
 # Kickstart counter
 # ---------------------------------------------------------------------------
 
@@ -992,6 +1132,17 @@ def get_parser() -> argparse.ArgumentParser:
     uw = sub.add_parser("unresolved-workdays")
     uw.add_argument("--max-days", type=int, default=7)
 
+    rs = sub.add_parser("reminder-status")
+    rs.add_argument("--max-days", type=int, default=7)
+
+    nt = sub.add_parser("notify")
+    nt.add_argument("--channel", default="stdout",
+                    choices=["stdout", "macos", "slack", "auto"],
+                    help="Where to deliver the reminder (default: stdout)")
+    nt.add_argument("--max-days", type=int, default=7)
+    nt.add_argument("--force", action="store_true",
+                    help="Emit even when nothing is outstanding (test the pipe)")
+
     return p
 
 
@@ -1115,6 +1266,19 @@ def main() -> None:
         cfg = load_cfg()
         result = unresolved_workdays(cfg, args.max_days)
         print(json.dumps(result, ensure_ascii=False))
+
+    elif args.cmd == "reminder-status":
+        cfg = load_cfg()
+        result = reminder_status(cfg, args.max_days)
+        print(json.dumps(result, ensure_ascii=False))
+
+    elif args.cmd == "notify":
+        cfg = load_cfg()
+        result = notify(cfg, args.channel, args.max_days, args.force)
+        # notify() may already have printed the message (stdout channel); the
+        # JSON goes to stderr so a cron log captures structured status without
+        # corrupting a stdout-piped notification.
+        print(json.dumps(result, ensure_ascii=False), file=sys.stderr)
 
     else:
         parser.print_help()

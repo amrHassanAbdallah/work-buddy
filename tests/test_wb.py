@@ -585,5 +585,61 @@ class TestUnresolvedWorkdays(unittest.TestCase):
             self.assertEqual(d.isoweekday(), 1)
 
 
+class TestReminder(unittest.TestCase):
+    def _recent_workday(self):
+        d = datetime.date.today() - datetime.timedelta(days=1)
+        while d.isoweekday() > 5:
+            d -= datetime.timedelta(days=1)
+        return d
+
+    def test_status_flags_unresolved(self):
+        cfg, _, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, planned=["- [ ] Stuck → perf-q2"])  # no eod
+        status = wb.reminder_status(cfg, max_days=1)
+        self.assertTrue(status["needs_reminder"])
+        self.assertIn("Run /work-buddy catchup", status["message"])
+        self.assertTrue(any(u["date"] == d.isoformat() for u in status["unresolved"]))
+
+    def test_status_clean_when_caught_up(self):
+        cfg, _, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        status = wb.reminder_status(cfg, max_days=1)
+        self.assertFalse(status["needs_reminder"])
+        self.assertEqual(status["message"], "")
+
+    def test_notify_stdout_delivers_when_unresolved(self):
+        cfg, cfg_path, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, planned=["- [ ] Stuck"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "notify", "--channel", "stdout", "--max-days", "1"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("catchup", r.stdout)  # human message on stdout
+        self.assertIn("\"delivered\"", r.stderr)  # structured status on stderr
+
+    def test_notify_silent_when_caught_up(self):
+        cfg, cfg_path, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "notify", "--channel", "stdout", "--max-days", "1"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "")  # nothing surfaced to the user
+
+    def test_notify_force_emits_when_nothing_outstanding(self):
+        cfg, cfg_path, work = make_vault()
+        d = self._recent_workday()
+        write_day(work, d, energy_eod=4, reflection="done", done=["- [x] A"])
+        r = subprocess.run([sys.executable, WB_CLI, "--config", str(cfg_path),
+                            "notify", "--channel", "stdout", "--max-days", "1", "--force"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotEqual(r.stdout.strip(), "")  # force surfaces something
+
+
 if __name__ == "__main__":
     unittest.main()
