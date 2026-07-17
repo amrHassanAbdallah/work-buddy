@@ -1,7 +1,7 @@
 """Tests for helpers/wb.py — stdlib unittest, no external deps.
 
 Run from repo root:
-    python3 -m unittest tests.test_wb -v
+    python3 -m unittest discover -s tests -v
 """
 
 import datetime
@@ -100,17 +100,25 @@ class TestParseTask(unittest.TestCase):
         self.assertEqual(t["goal_id"], "perf-q2")
 
     def test_off_plan_marker_after_goal(self):
+        # The off-plan marker is stripped before goal matching, so the goal link
+        # survives regardless of marker order and the goal text is not left behind.
         t = wb.parse_task("- [x] Helped Sara debug → perf-q2 [off-plan]")
-        self.assertEqual(t["off_plan"], True)
-        # goal_id only matches when arrow is at end-of-line; here [off-plan] is after,
-        # so goal_id parsing may or may not catch it. Either way, off_plan must be True.
-        self.assertEqual(t["text"].rstrip(), "Helped Sara debug" if t["goal_id"] else "Helped Sara debug → perf-q2")
+        self.assertTrue(t["off_plan"])
+        self.assertEqual(t["goal_id"], "perf-q2")
+        self.assertEqual(t["text"], "Helped Sara debug")
 
     def test_off_plan_no_goal(self):
         t = wb.parse_task("- [x] Unplanned chore [off-plan]")
         self.assertTrue(t["off_plan"])
         self.assertIsNone(t["goal_id"])
         self.assertEqual(t["text"], "Unplanned chore")
+
+    def test_uppercase_checkbox_is_checked(self):
+        t = wb.parse_task("- [X] Done via Obsidian → perf-q2")
+        self.assertIsNotNone(t)
+        self.assertTrue(t["checked"])
+        self.assertEqual(t["text"], "Done via Obsidian")
+        self.assertEqual(t["goal_id"], "perf-q2")
 
 
 class TestParseGoals(unittest.TestCase):

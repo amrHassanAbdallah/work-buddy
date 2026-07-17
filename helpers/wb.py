@@ -132,7 +132,7 @@ def week_range(iso_year: int, iso_week: int) -> tuple:
 # Task parsing
 # ---------------------------------------------------------------------------
 
-TASK_RE = re.compile(r"^- \[( |x)\] (.+)$")
+TASK_RE = re.compile(r"^- \[( |x|X)\] (.+)$")
 GOAL_ID_RE = re.compile(r"→\s*([a-z0-9-]+)\s*$")
 OFF_PLAN_RE = re.compile(r"\[off-plan\]")
 
@@ -141,15 +141,15 @@ def parse_task(line: str) -> "dict | None":
     m = TASK_RE.match(line.rstrip())
     if not m:
         return None
-    checked = m.group(1) == "x"
+    checked = m.group(1) in ("x", "X")
     text_raw = m.group(2)
-    goal_m = GOAL_ID_RE.search(text_raw)
-    goal_id = goal_m.group(1) if goal_m else None
     off_plan = bool(OFF_PLAN_RE.search(text_raw))
-    # Strip both markers from text in either order
-    text = text_raw
+    # Strip the off-plan marker first so the goal marker still resolves when it
+    # was written as "→ goal [off-plan]" (GOAL_ID_RE is anchored to end-of-line).
+    text = OFF_PLAN_RE.sub("", text_raw)
+    goal_m = GOAL_ID_RE.search(text)
+    goal_id = goal_m.group(1) if goal_m else None
     text = GOAL_ID_RE.sub("", text)
-    text = OFF_PLAN_RE.sub("", text)
     text = text.rstrip(" →").rstrip()
     return {
         "text": text,
